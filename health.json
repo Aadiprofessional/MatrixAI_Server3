@@ -1,0 +1,1 @@
+{"error":"Not Found","message":"The requested endpoint does not exist","availableEndpoints":["/health","/api","/debug/env","/api/audio/*","/api/email/*","/api/humanize/*","/api/image/*","/api/user/*","/api/video/*","/api/payment/*","/api/admin/*","/api/detection/*"]}

@@ -1,0 +1,321 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Enhanced Feedback & Help APIs Test</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        .container {
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        h1, h2 {
+            color: #333;
+        }
+        .form-group {
+            margin-bottom: 15px;
+        }
+        label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: bold;
+        }
+        input, textarea, select {
+            width: 100%;
+            padding: 8px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            box-sizing: border-box;
+        }
+        textarea {
+            height: 100px;
+            resize: vertical;
+        }
+        button {
+            background-color: #007bff;
+            color: white;
+            padding: 10px 20px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            margin-right: 10px;
+        }
+        button:hover {
+            background-color: #0056b3;
+        }
+        .admin-btn {
+            background-color: #28a745;
+        }
+        .admin-btn:hover {
+            background-color: #1e7e34;
+        }
+        .response {
+            margin-top: 15px;
+            padding: 10px;
+            border-radius: 4px;
+            white-space: pre-wrap;
+        }
+        .success {
+            background-color: #d4edda;
+            border: 1px solid #c3e6cb;
+            color: #155724;
+        }
+        .error {
+            background-color: #f8d7da;
+            border: 1px solid #f5c6cb;
+            color: #721c24;
+        }
+        .grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+        }
+        @media (max-width: 768px) {
+            .grid {
+                grid-template-columns: 1fr;
+            }
+        }
+    </style>
+</head>
+<body>
+    <h1>Enhanced Feedback & Help APIs Test</h1>
+    <p>Test the enhanced feedback and help request APIs with email notifications and admin resolution features.</p>
+
+    <div class="grid">
+        <!-- User APIs -->
+        <div class="container">
+            <h2>User APIs</h2>
+            
+            <h3>Submit Feedback</h3>
+            <div class="form-group">
+                <label for="feedbackUid">User ID:</label>
+                <input type="text" id="feedbackUid" value="test-user-123" placeholder="Enter user ID">
+            </div>
+            <div class="form-group">
+                <label for="feedbackIssue">Issue Type:</label>
+                <select id="feedbackIssue">
+                    <option value="bug">Bug Report</option>
+                    <option value="feature">Feature Request</option>
+                    <option value="improvement">Improvement</option>
+                    <option value="other">Other</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label for="feedbackDescription">Description:</label>
+                <textarea id="feedbackDescription" placeholder="Describe your feedback...">The image generation feature is working great, but it would be nice to have more style options.</textarea>
+            </div>
+            <button onclick="submitFeedback()">Submit Feedback</button>
+            <div id="feedbackResponse" class="response"></div>
+
+            <hr style="margin: 30px 0;">
+
+            <h3>Submit Help Request</h3>
+            <div class="form-group">
+                <label for="helpUid">User ID:</label>
+                <input type="text" id="helpUid" value="test-user-456" placeholder="Enter user ID">
+            </div>
+            <div class="form-group">
+                <label for="helpIssue">Issue Type:</label>
+                <select id="helpIssue">
+                    <option value="payment">Payment Issue</option>
+                    <option value="technical">Technical Problem</option>
+                    <option value="account">Account Issue</option>
+                    <option value="other">Other</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label for="helpDescription">Description:</label>
+                <textarea id="helpDescription" placeholder="Describe your issue...">I'm having trouble with my payment not going through. Order ID: ORD-12345</textarea>
+            </div>
+            <div class="form-group">
+                <label for="helpOrderId">Order ID (optional):</label>
+                <input type="text" id="helpOrderId" value="ORD-12345" placeholder="Enter order ID if applicable">
+            </div>
+            <button onclick="submitHelpRequest()">Submit Help Request</button>
+            <div id="helpResponse" class="response"></div>
+        </div>
+
+        <!-- Admin APIs -->
+        <div class="container">
+            <h2>Admin APIs</h2>
+            
+            <h3>Get All Feedback</h3>
+            <button class="admin-btn" onclick="getAllFeedback()">Get All Feedback</button>
+            <div id="allFeedbackResponse" class="response"></div>
+
+            <hr style="margin: 20px 0;">
+
+            <h3>Get All Help Requests</h3>
+            <button class="admin-btn" onclick="getAllHelp()">Get All Help Requests</button>
+            <div id="allHelpResponse" class="response"></div>
+
+            <hr style="margin: 20px 0;">
+
+            <h3>Resolve Feedback</h3>
+            <div class="form-group">
+                <label for="resolveFeedbackId">Feedback ID:</label>
+                <input type="text" id="resolveFeedbackId" placeholder="Enter feedback ID from the list above">
+            </div>
+            <div class="form-group">
+                <label for="feedbackAdminComment">Admin Comment:</label>
+                <textarea id="feedbackAdminComment" placeholder="Enter your response to the feedback...">Thank you for your feedback! We've added more style options to the image generation feature. You can now find them in the advanced settings.</textarea>
+            </div>
+            <div class="form-group">
+                <label for="feedbackAdminId">Admin ID:</label>
+                <input type="text" id="feedbackAdminId" value="admin-001" placeholder="Enter admin ID">
+            </div>
+            <button class="admin-btn" onclick="resolveFeedback()">Resolve Feedback</button>
+            <div id="resolveFeedbackResponse" class="response"></div>
+
+            <hr style="margin: 20px 0;">
+
+            <h3>Resolve Help Request</h3>
+            <div class="form-group">
+                <label for="resolveHelpId">Help Request ID:</label>
+                <input type="text" id="resolveHelpId" placeholder="Enter help request ID from the list above">
+            </div>
+            <div class="form-group">
+                <label for="helpAdminComment">Admin Comment:</label>
+                <textarea id="helpAdminComment" placeholder="Enter your resolution...">I've processed your refund for order ORD-12345. The payment issue was due to a temporary gateway problem. You should see the refund in 3-5 business days.</textarea>
+            </div>
+            <div class="form-group">
+                <label for="helpAdminId">Admin ID:</label>
+                <input type="text" id="helpAdminId" value="admin-001" placeholder="Enter admin ID">
+            </div>
+            <button class="admin-btn" onclick="resolveHelpRequest()">Resolve Help Request</button>
+            <div id="resolveHelpResponse" class="response"></div>
+        </div>
+    </div>
+
+    <script>
+        const API_BASE = 'http://localhost:3000';
+
+        function showResponse(elementId, data, isError = false) {
+            const element = document.getElementById(elementId);
+            element.textContent = JSON.stringify(data, null, 2);
+            element.className = `response ${isError ? 'error' : 'success'}`;
+        }
+
+        async function submitFeedback() {
+            try {
+                const response = await fetch(`${API_BASE}/api/user/submitFeedback`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        uid: document.getElementById('feedbackUid').value,
+                        issue: document.getElementById('feedbackIssue').value,
+                        description: document.getElementById('feedbackDescription').value
+                    })
+                });
+                
+                const data = await response.json();
+                showResponse('feedbackResponse', data, !response.ok);
+            } catch (error) {
+                showResponse('feedbackResponse', { error: error.message }, true);
+            }
+        }
+
+        async function submitHelpRequest() {
+            try {
+                const response = await fetch(`${API_BASE}/api/user/getHelp`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        uid: document.getElementById('helpUid').value,
+                        issue: document.getElementById('helpIssue').value,
+                        description: document.getElementById('helpDescription').value,
+                        orderId: document.getElementById('helpOrderId').value
+                    })
+                });
+                
+                const data = await response.json();
+                showResponse('helpResponse', data, !response.ok);
+            } catch (error) {
+                showResponse('helpResponse', { error: error.message }, true);
+            }
+        }
+
+        async function getAllFeedback() {
+            try {
+                const response = await fetch(`${API_BASE}/api/admin/getAllFeedback`);
+                const data = await response.json();
+                showResponse('allFeedbackResponse', data, !response.ok);
+            } catch (error) {
+                showResponse('allFeedbackResponse', { error: error.message }, true);
+            }
+        }
+
+        async function getAllHelp() {
+            try {
+                const response = await fetch(`${API_BASE}/api/admin/getAllHelp`);
+                const data = await response.json();
+                showResponse('allHelpResponse', data, !response.ok);
+            } catch (error) {
+                showResponse('allHelpResponse', { error: error.message }, true);
+            }
+        }
+
+        async function resolveFeedback() {
+            try {
+                const response = await fetch(`${API_BASE}/api/admin/resolveFeedback`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        feedbackId: document.getElementById('resolveFeedbackId').value,
+                        adminComment: document.getElementById('feedbackAdminComment').value,
+                        adminId: document.getElementById('feedbackAdminId').value
+                    })
+                });
+                
+                const data = await response.json();
+                showResponse('resolveFeedbackResponse', data, !response.ok);
+            } catch (error) {
+                showResponse('resolveFeedbackResponse', { error: error.message }, true);
+            }
+        }
+
+        async function resolveHelpRequest() {
+            try {
+                const response = await fetch(`${API_BASE}/api/admin/resolveHelpRequest`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        helpRequestId: document.getElementById('resolveHelpId').value,
+                        adminComment: document.getElementById('helpAdminComment').value,
+                        adminId: document.getElementById('helpAdminId').value
+                    })
+                });
+                
+                const data = await response.json();
+                showResponse('resolveHelpResponse', data, !response.ok);
+            } catch (error) {
+                showResponse('resolveHelpResponse', { error: error.message }, true);
+            }
+        }
+
+        // Auto-load feedback and help requests on page load
+        window.addEventListener('load', () => {
+            getAllFeedback();
+            getAllHelp();
+        });
+    </script>
+</body>
+</html>

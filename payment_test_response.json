@@ -1,0 +1,4 @@
+  % Total    % Received % Xferd  Average Speed   Time    Time     Time  Current
+                                 Dload  Upload   Total   Spent    Left  Speed
+  0     0    0     0    0     0      0      0 --:--:-- --:--:-- --:--:--     0100   312  100   238  100    74   7241   2251 --:--:-- --:--:-- --:--:--  9750
+{"error":"Provider Error","message":"Payment processing error. Please try again or contact support.","code":"PROVIDER_ERROR","timestamp":"2025-08-26T23:05:48.600Z","requestId":"req_1756249548597_hestefjy8","retryable":true,"retryAfter":5}

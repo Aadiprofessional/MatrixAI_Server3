@@ -1,0 +1,4 @@
+  % Total    % Received % Xferd  Average Speed   Time    Time     Time  Current
+                                 Dload  Upload   Total   Spent    Left  Speed
+  0     0    0     0    0     0      0      0 --:--:-- --:--:-- --:--:--     0100   281  100   207  100    74    282    101 --:--:-- --:--:-- --:--:--   383100   281  100   207  100    74    282    100 --:--:-- --:--:-- --:--:--   383
+{"error":"Validation Error","message":"Invalid request method [POST]. Supported methods are [GET].","code":"VALIDATION_ERROR","timestamp":"2025-08-26T23:09:38.125Z","requestId":"req_1756249777400_cxkn0ywin"}

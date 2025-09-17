@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Test Admin APIs</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; }
+        .test-section { margin: 20px 0; padding: 15px; border: 1px solid #ccc; }
+        .result { margin-top: 10px; padding: 10px; background: #f5f5f5; }
+        .error { background: #ffebee; color: #c62828; }
+        .success { background: #e8f5e8; color: #2e7d32; }
+        button { padding: 10px 20px; margin: 5px; cursor: pointer; }
+    </style>
+</head>
+<body>
+    <h1>Admin API Test</h1>
+    
+    <div class="test-section">
+        <h3>Test getAllFeedback API</h3>
+        <button onclick="testGetAllFeedback()">Test getAllFeedback</button>
+        <div id="feedback-result" class="result"></div>
+    </div>
+    
+    <div class="test-section">
+        <h3>Test getAllHelp API</h3>
+        <button onclick="testGetAllHelp()">Test getAllHelp</button>
+        <div id="help-result" class="result"></div>
+    </div>
+
+    <script>
+        const API_BASE = 'https://main-matrixai-server-lujmidrakh.cn-hangzhou.fcapp.run';
+        
+        async function testGetAllFeedback() {
+            const resultDiv = document.getElementById('feedback-result');
+            resultDiv.innerHTML = 'Testing...';
+            resultDiv.className = 'result';
+            
+            try {
+                const response = await fetch(`${API_BASE}/api/admin/getAllFeedback`, {
+                    method: 'GET',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    }
+                });
+                
+                console.log('Response status:', response.status);
+                console.log('Response headers:', response.headers);
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                }
+                
+                const data = await response.json();
+                console.log('Response data:', data);
+                
+                resultDiv.innerHTML = `
+                    <strong>Success!</strong><br>
+                    Status: ${response.status}<br>
+                    Data length: ${Array.isArray(data) ? data.length : 'Not an array'}<br>
+                    <details>
+                        <summary>Full Response</summary>
+                        <pre>${JSON.stringify(data, null, 2)}</pre>
+                    </details>
+                `;
+                resultDiv.className = 'result success';
+                
+            } catch (error) {
+                console.error('Error:', error);
+                resultDiv.innerHTML = `
+                    <strong>Error!</strong><br>
+                    ${error.message}<br>
+                    Check console for details.
+                `;
+                resultDiv.className = 'result error';
+            }
+        }
+        
+        async function testGetAllHelp() {
+            const resultDiv = document.getElementById('help-result');
+            resultDiv.innerHTML = 'Testing...';
+            resultDiv.className = 'result';
+            
+            try {
+                const response = await fetch(`${API_BASE}/api/admin/getAllHelp`, {
+                    method: 'GET',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    }
+                });
+                
+                console.log('Response status:', response.status);
+                console.log('Response headers:', response.headers);
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                }
+                
+                const data = await response.json();
+                console.log('Response data:', data);
+                
+                resultDiv.innerHTML = `
+                    <strong>Success!</strong><br>
+                    Status: ${response.status}<br>
+                    Data length: ${Array.isArray(data) ? data.length : 'Not an array'}<br>
+                    <details>
+                        <summary>Full Response</summary>
+                        <pre>${JSON.stringify(data, null, 2)}</pre>
+                    </details>
+                `;
+                resultDiv.className = 'result success';
+                
+            } catch (error) {
+                console.error('Error:', error);
+                resultDiv.innerHTML = `
+                    <strong>Error!</strong><br>
+                    ${error.message}<br>
+                    Check console for details.
+                `;
+                resultDiv.className = 'result error';
+            }
+        }
+    </script>
+</body>
+</html>

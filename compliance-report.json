@@ -1,0 +1,122 @@
+{
+  "timestamp": "2025-09-12T03:32:58.569Z",
+  "complianceLevel": "SAQ A",
+  "merchantInfo": {
+    "name": "MatrixAI Server",
+    "type": "Hosted Payment Pages",
+    "transactionVolume": "Level 4 (< 20,000 e-commerce transactions annually)"
+  },
+  "requirements": [
+    {
+      "id": "2.1",
+      "title": "No Default Passwords",
+      "status": "COMPLIANT",
+      "description": "Application uses environment variables for configuration"
+    },
+    {
+      "id": "4.1",
+      "title": "Secure Transmission",
+      "status": "COMPLIANT",
+      "description": "HTTPS enforcement and security headers"
+    },
+    {
+      "id": "6.5",
+      "title": "Secure Development",
+      "status": "COMPLIANT",
+      "description": "Input validation and secure coding practices"
+    },
+    {
+      "id": "8.2",
+      "title": "User Authentication",
+      "status": "REVIEW_REQUIRED",
+      "description": "Authentication for payment operations"
+    },
+    {
+      "id": "10.2",
+      "title": "Audit Logging",
+      "status": "COMPLIANT",
+      "description": "Audit trail for payment operations"
+    },
+    {
+      "id": "12.1",
+      "title": "Security Policy",
+      "status": "COMPLIANT",
+      "description": "PCI-DSS documentation and policies"
+    }
+  ],
+  "overallStatus": "REVIEW_REQUIRED",
+  "recommendations": [],
+  "testResults": {
+    "status": "MANUAL_REVIEW_REQUIRED"
+  },
+  "codebaseAnalysis": {
+    "dataHandling": {
+      "cardDataStorage": "NON_COMPLIANT",
+      "cardDataTransmission": "COMPLIANT",
+      "cardDataProcessing": "COMPLIANT",
+      "findings": [
+        {
+          "file": "src/services/pciComplianceMonitor.js",
+          "type": "Expiry Date",
+          "severity": "HIGH",
+          "description": "Potential Expiry Date reference found"
+        },
+        {
+          "file": "src/services/subscriptionExpirationService.js",
+          "type": "Expiry Date",
+          "severity": "HIGH",
+          "description": "Potential Expiry Date reference found"
+        }
+      ]
+    },
+    "security": {
+      "httpsEnforcement": "COMPLIANT",
+      "securityHeaders": "COMPLIANT",
+      "rateLimit": "COMPLIANT",
+      "findings": [
+        {
+          "type": "HTTPS Enforcement",
+          "severity": "INFO",
+          "description": "HTTPS enforcement middleware implemented"
+        }
+      ]
+    },
+    "logging": {
+      "sanitization": "COMPLIANT",
+      "auditTrail": "COMPLIANT",
+      "findings": [
+        {
+          "type": "Log Sanitization",
+          "severity": "INFO",
+          "description": "Log sanitization implemented"
+        },
+        {
+          "type": "Audit Trail",
+          "severity": "INFO",
+          "description": "Payment logging system implemented"
+        }
+      ]
+    },
+    "validation": {
+      "inputValidation": "COMPLIANT",
+      "authenticationRequired": "UNKNOWN",
+      "findings": [
+        {
+          "type": "Input Validation",
+          "severity": "INFO",
+          "description": "Payment request validation implemented"
+        }
+      ]
+    }
+  },
+  "compliancePercentage": 83.33333333333334,
+  "documentation": {
+    "complete": true,
+    "missing": [],
+    "present": [
+      "docs/PCI_DSS_SAQ_A_QUESTIONNAIRE.md",
+      "docs/PCI_DSS_AOC_SAQ_A.md",
+      "PCI_DSS_COMPLIANCE_ANALYSIS.md"
+    ]
+  }
+}

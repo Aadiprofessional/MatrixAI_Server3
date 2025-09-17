@@ -1,0 +1,53 @@
+{
+  "name": "matrixai-server",
+  "version": "1.0.0",
+  "description": "MatrixAI Server with audio, video, and image processing capabilities",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "dev": "node --watch index.js",
+    "test": "node test-server.js",
+    "postinstall": "npm install --os=linux --cpu=x64 sharp",
+    "test-deployment": "node test-deployment.js"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.52.0",
+    "axios": "^1.11.0",
+    "bcrypt": "^6.0.0",
+    "chartjs-node-canvas": "^5.0.0",
+    "cors": "^2.8.5",
+    "dotenv": "^17.2.0",
+    "express": "^4.18.2",
+    "express-rate-limit": "^8.1.0",
+    "helmet": "^8.1.0",
+    "html-docx-js": "^0.3.1",
+    "html-to-docx": "^1.8.0",
+    "jsdom": "^26.1.0",
+    "jsonwebtoken": "^9.0.2",
+    "mammoth": "^1.10.0",
+    "multer": "^2.0.2",
+    "node-cron": "^3.0.3",
+    "node-fetch": "^2.7.0",
+    "pptxgenjs": "^4.0.1",
+    "resend": "^2.1.0",
+    "serverless-http": "^3.2.0",
+    "sharp": "^0.34.3",
+    "uuid": "^9.0.1",
+    "xlsx": "^0.18.5",
+    "xml2js": "^0.6.2"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.2"
+  },
+  "keywords": [
+    "matrixai",
+    "audio",
+    "video",
+    "image",
+    "transcription",
+    "ai",
+    "api"
+  ],
+  "author": "MatrixAI Team",
+  "license": "MIT"
+}
