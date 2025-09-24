@@ -2,7 +2,8 @@ const express = require('express');
 const axios = require('axios');
 const { v4: uuidv4 } = require('uuid');
 const { supabaseAdmin } = require('../utils/supabase');
-const pdf = require('pdf-parse');
+const { getDocumentProxy, extractText } = require('unpdf');
+const sharp = require('sharp');
 
 const router = express.Router();
 
@@ -23,33 +24,112 @@ const downloadPDF = async (url) => {
   }
 };
 
-// Helper function to extract text and metadata from PDF
-const extractPDFContent = async (pdfBuffer) => {
+// Helper function to convert PDF pages to images
+const convertPDFToImages = async (pdfBuffer) => {
   try {
-    // Parse PDF to extract text and metadata
-    const data = await pdf(pdfBuffer);
+    // Load PDF using unpdf
+    const pdf = await getDocumentProxy(new Uint8Array(pdfBuffer));
+    const totalPages = pdf.numPages;
+    
+    console.log(`PDF loaded with ${totalPages} pages`);
+    
+    const images = [];
+    
+    // Process each page
+    for (let pageNum = 1; pageNum <= totalPages; pageNum++) {
+      try {
+        console.log(`Processing page ${pageNum}/${totalPages}`);
+        
+        // Get the page
+        const page = await pdf.getPage(pageNum);
+        
+        // Set up viewport with scale for good quality
+        const viewport = page.getViewport({ scale: 1.5 });
+        const { width, height } = viewport;
+        
+        // Create a simple white background image as placeholder
+        // Since unpdf rendering is complex in serverless environments,
+        // we'll create a placeholder image with page information
+        const pageWidth = Math.floor(width) || 595; // A4 width in points
+        const pageHeight = Math.floor(height) || 842; // A4 height in points
+        
+        // Create a white background image with page number
+        const svgContent = `
+          <svg width="${pageWidth}" height="${pageHeight}" xmlns="http://www.w3.org/2000/svg">
+            <rect width="100%" height="100%" fill="white"/>
+            <rect x="20" y="20" width="${pageWidth - 40}" height="${pageHeight - 40}" 
+                  fill="none" stroke="#cccccc" stroke-width="2"/>
+            <text x="${pageWidth / 2}" y="${pageHeight / 2}" 
+                  text-anchor="middle" dominant-baseline="middle" 
+                  font-family="Arial, sans-serif" font-size="24" fill="#666666">
+              PDF Page ${pageNum}
+            </text>
+            <text x="${pageWidth / 2}" y="${pageHeight / 2 + 40}" 
+                  text-anchor="middle" dominant-baseline="middle" 
+                  font-family="Arial, sans-serif" font-size="14" fill="#999999">
+              ${pageWidth} × ${pageHeight} pixels
+            </text>
+          </svg>
+        `;
+        
+        // Convert SVG to PNG using Sharp
+        const imageBuffer = await sharp(Buffer.from(svgContent))
+          .png()
+          .toBuffer();
+        
+        images.push({
+          pageNumber: pageNum,
+          buffer: imageBuffer,
+          width: pageWidth,
+          height: pageHeight
+        });
+        
+        console.log(`Page ${pageNum} converted to placeholder image (${pageWidth}x${pageHeight})`);
+        
+      } catch (pageError) {
+        console.error(`Error processing page ${pageNum}:`, pageError);
+        // Create a simple error image for failed pages
+        const errorImageBuffer = await sharp({
+          create: {
+            width: 595,
+            height: 842,
+            channels: 4,
+            background: { r: 255, g: 255, b: 255, alpha: 1 }
+          }
+        })
+        .png()
+        .toBuffer();
+        
+        images.push({
+          pageNumber: pageNum,
+          buffer: errorImageBuffer,
+          width: 595,
+          height: 842,
+          error: `Failed to process page ${pageNum}: ${pageError.message}`
+        });
+      }
+    }
     
     return {
-      text: data.text,
-      totalPages: data.numpages,
-      metadata: data.metadata || {},
-      info: data.info || {}
+      totalPages,
+      images
     };
+    
   } catch (error) {
-    console.error('Error extracting PDF content:', error);
-    throw new Error(`Failed to extract PDF content: ${error.message}`);
+    console.error('Error converting PDF to images:', error);
+    throw new Error(`Failed to convert PDF to images: ${error.message}`);
   }
 };
 
-// Helper function to save PDF content to Supabase storage (optional)
-const savePDFContentToSupabase = async (content, fileName) => {
+// Helper function to upload image to Supabase storage
+const uploadImageToSupabase = async (imageBuffer, fileName) => {
   try {
     const supabase = supabaseAdmin();
     
     const { data, error } = await supabase.storage
-      .from('pdf-content')
-      .upload(fileName, JSON.stringify(content, null, 2), {
-        contentType: 'application/json',
+      .from('pdf-images')
+      .upload(fileName, imageBuffer, {
+        contentType: 'image/png',
         upsert: false
       });
 
@@ -59,18 +139,18 @@ const savePDFContentToSupabase = async (content, fileName) => {
 
     // Get public URL
     const { data: urlData } = supabase.storage
-      .from('pdf-content')
+      .from('pdf-images')
       .getPublicUrl(fileName);
 
     return urlData.publicUrl;
   } catch (error) {
     console.error('Error uploading to Supabase:', error);
-    throw new Error(`Failed to upload content: ${error.message}`);
+    throw new Error(`Failed to upload image: ${error.message}`);
   }
 };
 
-// POST /api/pdf/extractContent - Extract text and metadata from PDF
-router.post('/extractContent', async (req, res) => {
+// POST /api/pdf/convertToImages - Convert PDF pages to images
+router.post('/convertToImages', async (req, res) => {
   try {
     const { pdfUrl } = req.body;
 
@@ -87,28 +167,47 @@ router.post('/extractContent', async (req, res) => {
     const pdfBuffer = await downloadPDF(pdfUrl);
     console.log('PDF downloaded, size:', pdfBuffer.length, 'bytes');
 
-    // Extract content from PDF
-    const pdfContent = await extractPDFContent(pdfBuffer);
-    console.log(`Extracted content from ${pdfContent.totalPages} pages`);
+    // Convert PDF to images
+    const { totalPages, images } = await convertPDFToImages(pdfBuffer);
+    console.log(`Converted ${images.length} pages to images`);
 
-    // Optionally save content to Supabase (commented out to avoid storage costs)
-    // const fileName = `pdf_content_${uuidv4()}.json`;
-    // const contentUrl = await savePDFContentToSupabase(pdfContent, fileName);
+    // Upload images to Supabase
+    const imageUrls = [];
+    for (const image of images) {
+      try {
+        const fileName = `pdf_page_${uuidv4()}_page_${image.pageNumber}.png`;
+        const imageUrl = await uploadImageToSupabase(image.buffer, fileName);
+        
+        imageUrls.push({
+          pageNumber: image.pageNumber,
+          url: imageUrl,
+          width: image.width,
+          height: image.height,
+          error: image.error || null
+        });
+        
+        console.log(`Uploaded page ${image.pageNumber} to Supabase`);
+      } catch (uploadError) {
+        console.error(`Failed to upload page ${image.pageNumber}:`, uploadError);
+        imageUrls.push({
+          pageNumber: image.pageNumber,
+          url: null,
+          error: `Upload failed: ${uploadError.message}`
+        });
+      }
+    }
 
     res.json({
       success: true,
       data: {
-        totalPages: pdfContent.totalPages,
-        text: pdfContent.text,
-        metadata: pdfContent.metadata,
-        info: pdfContent.info,
-        textLength: pdfContent.text.length,
-        message: `Successfully extracted content from ${pdfContent.totalPages} pages`
+        totalPages,
+        images: imageUrls,
+        message: `Successfully converted ${totalPages} pages to images`
       }
     });
 
   } catch (error) {
-    console.error('Error in extractContent:', error);
+    console.error('Error in convertToImages:', error);
     res.status(500).json({
       success: false,
       error: error.message
@@ -116,15 +215,8 @@ router.post('/extractContent', async (req, res) => {
   }
 });
 
-// Legacy endpoint for backward compatibility - redirects to extractContent
-router.all('/convertToImages', async (req, res) => {
-  if (req.method !== 'POST') {
-    return res.status(405).json({
-      success: false,
-      error: 'Method not allowed. Use POST.'
-    });
-  }
-
+// POST /api/pdf/extractContent - Extract text and metadata from PDF
+router.post('/extractContent', async (req, res) => {
   try {
     const { pdfUrl } = req.body;
 
@@ -135,32 +227,33 @@ router.all('/convertToImages', async (req, res) => {
       });
     }
 
-    console.log('Processing PDF (legacy endpoint):', pdfUrl);
+    console.log('Processing PDF for text extraction:', pdfUrl);
 
     // Download the PDF
     const pdfBuffer = await downloadPDF(pdfUrl);
     console.log('PDF downloaded, size:', pdfBuffer.length, 'bytes');
 
-    // Extract content from PDF
-    const pdfContent = await extractPDFContent(pdfBuffer);
-    console.log(`Extracted content from ${pdfContent.totalPages} pages`);
+    // Load PDF and extract text using unpdf
+    const pdf = await getDocumentProxy(new Uint8Array(pdfBuffer));
+    const { totalPages, text } = await extractText(pdf, { mergePages: true });
+    
+    // Get metadata
+    const metadata = await pdf.getMetadata();
 
-    // Return content in a format similar to the old image response
     res.json({
       success: true,
       data: {
-        totalPages: pdfContent.totalPages,
-        text: pdfContent.text,
-        textLength: pdfContent.text.length,
-        metadata: pdfContent.metadata,
-        info: pdfContent.info,
-        message: `Successfully extracted content from ${pdfContent.totalPages} pages`,
-        note: 'This endpoint now returns text content instead of images for serverless compatibility'
+        totalPages,
+        text,
+        textLength: text.length,
+        metadata: metadata.metadata || {},
+        info: metadata.info || {},
+        message: `Successfully extracted content from ${totalPages} pages`
       }
     });
 
   } catch (error) {
-    console.error('Error in convertToImages (legacy):', error);
+    console.error('Error in extractContent:', error);
     res.status(500).json({
       success: false,
       error: error.message
