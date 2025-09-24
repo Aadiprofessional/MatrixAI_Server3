@@ -14,6 +14,8 @@ const adminRoutes = require('./routes/adminRoutes.js');
 const detectionRoutes = require('./routes/detectionRoutes.js');
 const presentationRoutes = require('./routes/presentationRoutes.js');
 const documentRoutes = require('./routes/documentRoutes.js');
+const aiImageGenerationRoutes = require('./routes/aiImageGenerationRoutes.js');
+const pdfRoutes = require('./routes/pdfRoutes.js');
 
 // Import payment routes
 let paymentRoutes;
@@ -99,16 +101,14 @@ const corsOptions = {
 };
 
 // Enable CORS for development and payment integration
-// For production serverless deployment, this may be handled by s.yaml
+// For production serverless deployment, CORS is handled by s.yaml
 if (process.env.NODE_ENV === 'development' || process.env.ENVIRONMENT === 'development') {
   app.use(cors(corsOptions));
   app.options('*', cors(corsOptions));
   console.log('CORS enabled for development environment');
 } else {
-  // For production, we still enable CORS but log it
-  app.use(cors(corsOptions));
-  app.options('*', cors(corsOptions));
-  console.log('CORS enabled for production environment');
+  // For production, CORS is handled by Function Compute (s.yaml)
+  console.log('Production environment - CORS handled by serverless configuration');
 }
 
 app.use(express.json({ limit: '10mb' }));
@@ -158,6 +158,7 @@ app.get('/api', (req, res) => {
       payment: '/api/payment/*',
       admin: '/api/admin/*',
       detection: '/api/detection/*',
+      'ai-image': '/api/ai-image/*',
       health: '/health',
       debug: '/debug/env'
     },
@@ -178,6 +179,8 @@ app.use('/api/admin', adminRoutes);
 app.use('/api/detection', detectionRoutes);
 app.use('/api/presentation', presentationRoutes);
 app.use('/api/document', documentRoutes);
+app.use('/api/ai-image', aiImageGenerationRoutes);
+app.use('/api/pdf', pdfRoutes);
 
 // 404 handler
 app.use('*', (req, res) => {

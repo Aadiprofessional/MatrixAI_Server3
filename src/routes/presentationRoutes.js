@@ -6,7 +6,6 @@ const axios = require("axios");
 const PptxGenJS = require("pptxgenjs");
 const fs = require("fs");
 const path = require("path");
-const { ChartJSNodeCanvas } = require("chartjs-node-canvas");
 const xml2js = require("xml2js");
 const { JSDOM } = require("jsdom");
 // d3 removed - not used in this file

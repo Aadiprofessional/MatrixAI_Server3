@@ -114,18 +114,22 @@ router.post('/createDetection', async (req, res) => {
       language,
       created_at: createdAt,
       
-      // GPTZero API response fields
+      // GPTZero API response fields (mapped to our schema)
       scan_id: detectionResult.scanId,
-      version: detectionResult.version,
-      neat_version: detectionResult.neatVersion,
+      gptzero_version: detectionResult.version,
+      gptzero_neat_version: detectionResult.neatVersion,
       predicted_class: document.predicted_class,
       confidence_score: document.confidence_score,
       confidence_category: document.confidence_category,
-      completely_generated_prob: document.completely_generated_prob,
-      average_generated_prob: document.average_generated_prob,
       overall_burstiness: document.overall_burstiness,
       result_message: document.result_message,
+      result_sub_message: document.result_sub_message,
       document_classification: document.document_classification,
+      
+      // GPTZero probabilities (mapped to our schema)
+      class_prob_human: document.class_probabilities?.human,
+      class_prob_ai: document.class_probabilities?.ai,
+      class_prob_mixed: document.class_probabilities?.mixed,
       
       // Calculated fields for backward compatibility
       is_human: isHuman,
@@ -134,16 +138,15 @@ router.post('/createDetection', async (req, res) => {
       text_words: totalWords,
       
       // JSONB fields for complex data
-      class_probabilities: document.class_probabilities,
       confidence_scores_raw: document.confidence_scores_raw,
       confidence_thresholds_raw: document.confidence_thresholds_raw,
       writing_stats: document.writing_stats,
       sentences: document.sentences || [],
       paragraphs: document.paragraphs || [],
-      subclass: document.subclass,
+      subclass_data: document.subclass,
       
       // Full API response for reference
-      full_response: detectionResult
+      full_gptzero_response: detectionResult
     });
 
     if (insertError) throw insertError;
@@ -160,16 +163,20 @@ router.post('/createDetection', async (req, res) => {
         
         // GPTZero API response fields
         scan_id: detectionResult.scanId,
-        version: detectionResult.version,
-        neat_version: detectionResult.neatVersion,
+        gptzero_version: detectionResult.version,
+        gptzero_neat_version: detectionResult.neatVersion,
         predicted_class: document.predicted_class,
         confidence_score: document.confidence_score,
         confidence_category: document.confidence_category,
-        completely_generated_prob: document.completely_generated_prob,
-        average_generated_prob: document.average_generated_prob,
         overall_burstiness: document.overall_burstiness,
         result_message: document.result_message,
+        result_sub_message: document.result_sub_message,
         document_classification: document.document_classification,
+        
+        // GPTZero probabilities
+        class_prob_human: document.class_probabilities?.human,
+        class_prob_ai: document.class_probabilities?.ai,
+        class_prob_mixed: document.class_probabilities?.mixed,
         
         // Calculated fields for backward compatibility
         is_human: isHuman,
@@ -178,17 +185,16 @@ router.post('/createDetection', async (req, res) => {
         text_words: totalWords,
         
         // Complex data structures
-        class_probabilities: document.class_probabilities,
         confidence_scores_raw: document.confidence_scores_raw,
         confidence_thresholds_raw: document.confidence_thresholds_raw,
         writing_stats: document.writing_stats,
         sentences: document.sentences || [],
         paragraphs: document.paragraphs || [],
-        subclass: document.subclass,
+        subclass_data: document.subclass,
         
         // Metadata
         provider: 'gptzero',
-        full_response: detectionResult
+        full_gptzero_response: detectionResult
       }
     });
   } catch (err) {

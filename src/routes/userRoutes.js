@@ -2146,18 +2146,10 @@ router.all('/submitFeedback', async (req, res) => {
 
 // Get subscription plans API
 router.all('/getSubscriptionPlans', async (req, res) => {
-  // Handle CORS preflight
+  // Handle OPTIONS requests for CORS preflight
   if (req.method === 'OPTIONS') {
-    res.header('Access-Control-Allow-Origin', '*');
-    res.header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-    res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization');
-    return res.status(200).json({ message: 'CORS preflight successful' });
+    return res.status(200).end();
   }
-
-  // Set CORS headers
-  res.header('Access-Control-Allow-Origin', '*');
-  res.header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-  res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization');
 
   try {
     const supabase = getSupabaseClient();
