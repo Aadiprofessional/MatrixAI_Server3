@@ -16,6 +16,7 @@ const presentationRoutes = require('./routes/presentationRoutes.js');
 const documentRoutes = require('./routes/documentRoutes.js');
 const aiImageGenerationRoutes = require('./routes/aiImageGenerationRoutes.js');
 const pdfRoutes = require('./routes/pdfRoutes.js');
+const qwenVisionRoutes = require('./routes/qwenVisionRoutes.js');
 
 // Import payment routes
 let paymentRoutes;
@@ -159,6 +160,7 @@ app.get('/api', (req, res) => {
       admin: '/api/admin/*',
       detection: '/api/detection/*',
       'ai-image': '/api/ai-image/*',
+      'qwen-vision': '/api/qwen-vision/*',
       health: '/health',
       debug: '/debug/env'
     },
@@ -181,13 +183,14 @@ app.use('/api/presentation', presentationRoutes);
 app.use('/api/document', documentRoutes);
 app.use('/api/ai-image', aiImageGenerationRoutes);
 app.use('/api/pdf', pdfRoutes);
+app.use('/api/qwen-vision', qwenVisionRoutes);
 
 // 404 handler
 app.use('*', (req, res) => {
   res.status(404).json({ 
     error: 'Not Found',
     message: 'The requested endpoint does not exist',
-    availableEndpoints: ['/health', '/api', '/debug/env', '/api/audio/*', '/api/email/*', '/api/humanize/*', '/api/image/*', '/api/user/*', '/api/video/*', '/api/payment/*', '/api/admin/*', '/api/detection/*']
+    availableEndpoints: ['/health', '/api', '/debug/env', '/api/audio/*', '/api/email/*', '/api/humanize/*', '/api/image/*', '/api/user/*', '/api/video/*', '/api/payment/*', '/api/admin/*', '/api/detection/*', '/api/qwen-vision/*']
   });
 });
 

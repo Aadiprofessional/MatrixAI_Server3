@@ -7,16 +7,50 @@ const router = express.Router();
 
 // Helper function to deduct coins using the subtractCoins API
 const deductCoins = async (uid, coinAmount, transactionName) => {
+  // Development mode bypass - if NODE_ENV is development or if BYPASS_COIN_DEDUCTION is set
+  const isDevelopment = process.env.NODE_ENV === 'development' || process.env.BYPASS_COIN_DEDUCTION === 'true';
+  
+  if (isDevelopment) {
+    console.log(`[DEV MODE] Bypassing coin deduction for ${transactionName} (${coinAmount} coins)`);
+    return { success: true, message: 'Development mode - coin deduction bypassed' };
+  }
+
   try {
+    console.log(`[COIN DEDUCTION] Attempting to deduct ${coinAmount} coins for ${transactionName} (UID: ${uid})`);
+    
     const response = await axios.post('https://main-matrixai-server-lujmidrakh.cn-hangzhou.fcapp.run/api/user/subtractCoins', {
       uid,
       coinAmount,
       transaction_name: transactionName,
+    }, {
+      timeout: 10000, // 10 second timeout
+      headers: {
+        'Content-Type': 'application/json'
+      }
     });
+    
+    console.log(`[COIN DEDUCTION] Success: ${response.data?.message || 'Coins deducted successfully'}`);
     return response.data;
   } catch (err) {
-    console.error('Coin deduction failed:', err.response?.data || err.message);
-    return { success: false, message: 'Coin deduction API failed' };
+    console.error('[COIN DEDUCTION] Failed:', err.response?.data || err.message);
+    
+    // More detailed error logging
+    if (err.response) {
+      console.error(`[COIN DEDUCTION] HTTP Status: ${err.response.status}`);
+      console.error(`[COIN DEDUCTION] Response Data:`, err.response.data);
+    } else if (err.request) {
+      console.error('[COIN DEDUCTION] No response received from server');
+    } else {
+      console.error('[COIN DEDUCTION] Request setup error:', err.message);
+    }
+    
+    // Return more specific error messages
+    const errorMessage = err.response?.data?.message || 
+                        (err.code === 'ECONNREFUSED' ? 'Failed to connect to coin deduction service' :
+                         err.code === 'ETIMEDOUT' ? 'Coin deduction service timeout' :
+                         'Failed to fetch user information');
+    
+    return { success: false, message: errorMessage };
   }
 };
 
@@ -852,109 +886,150 @@ const azureEndpoint = 'https://api.cognitive.microsofttranslator.com';
 const azureKey = process.env.AZURE_KEY;
 const region = 'eastus';
 
-// Helper function to translate text using Azure Translator
-const translateText = async (text, targetLanguage, sourceLanguage = 'en') => {
-  try {
-    // Check for environment variables - try all possible environment variable names
-    const translatorKey = process.env.AZURE_TRANSLATOR_KEY || process.env.AZURE_KEY || process.env.TRANSLATOR_KEY;
-    const translatorEndpoint = process.env.AZURE_TRANSLATOR_ENDPOINT || process.env.AZURE_ENDPOINT || 'https://api.cognitive.microsofttranslator.com';
-    const translatorRegion = process.env.AZURE_TRANSLATOR_LOCATION || process.env.AZURE_REGION || 'eastus';
-    
-    // Log API key (masked for security)
-    const maskedKey = translatorKey ? `${translatorKey.substring(0, 4)}...${translatorKey.substring(translatorKey.length - 4)}` : 'undefined';
-    console.log(`[TRANSLATION] Using API Key: ${maskedKey}`);
-    console.log(`[TRANSLATION] Using Endpoint: ${translatorEndpoint}`);
-    console.log(`[TRANSLATION] Using Region: ${translatorRegion}`);
-    
-    if (!translatorKey) {
-      console.error('[TRANSLATION] ERROR: Azure Translator API key is not defined in environment variables');
-      throw new Error('Azure Translator API key is missing');
-    }
-    
-    const response = await axios.post(
-      `${translatorEndpoint}/translate?api-version=3.0&from=${sourceLanguage}&to=${targetLanguage}`,
-      [{ text }],
-      {
-        headers: {
-          'Ocp-Apim-Subscription-Key': translatorKey,
-          'Ocp-Apim-Subscription-Region': translatorRegion,
-          'Content-Type': 'application/json'
+// Helper function to translate text using Azure Translator with retry logic
+const translateText = async (text, targetLanguage, sourceLanguage = 'en', maxRetries = 3) => {
+  // Check for environment variables - try all possible environment variable names
+  const translatorKey = process.env.AZURE_TRANSLATOR_KEY || process.env.AZURE_KEY || process.env.TRANSLATOR_KEY;
+  const translatorEndpoint = process.env.AZURE_TRANSLATOR_ENDPOINT || process.env.AZURE_ENDPOINT || 'https://api.cognitive.microsofttranslator.com';
+  const translatorRegion = process.env.AZURE_TRANSLATOR_LOCATION || process.env.AZURE_REGION || process.env.AZURE_API_REGION || 'eastus';
+  
+  // Log API key (masked for security)
+  const maskedKey = translatorKey ? `${translatorKey.substring(0, 4)}...${translatorKey.substring(translatorKey.length - 4)}` : 'undefined';
+  console.log(`[TRANSLATION] Using API Key: ${maskedKey}`);
+  console.log(`[TRANSLATION] Using Endpoint: ${translatorEndpoint}`);
+  console.log(`[TRANSLATION] Using Region: ${translatorRegion}`);
+  
+  if (!translatorKey) {
+    console.error('[TRANSLATION] ERROR: Azure Translator API key is not defined in environment variables');
+    throw new Error('Azure Translator API key is missing');
+  }
+  
+  // Retry logic with exponential backoff
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      console.log(`[TRANSLATION] Attempt ${attempt}/${maxRetries}: Translating "${text}" from ${sourceLanguage} to ${targetLanguage}`);
+      
+      const response = await axios.post(
+        `${translatorEndpoint}/translate?api-version=3.0&from=${sourceLanguage}&to=${targetLanguage}`,
+        [{ text }],
+        {
+          headers: {
+            'Ocp-Apim-Subscription-Key': translatorKey,
+            'Ocp-Apim-Subscription-Region': translatorRegion,
+            'Content-Type': 'application/json'
+          },
+          timeout: 30000, // 30 second timeout
+          validateStatus: function (status) {
+            return status >= 200 && status < 300; // default
+          }
         }
+      );
+      
+      const translatedText = response.data[0]?.translations[0]?.text || text;
+      console.log(`[TRANSLATION] Success: "${text}" → "${translatedText}"`);
+      return translatedText;
+      
+    } catch (error) {
+      console.error(`[TRANSLATION] Attempt ${attempt}/${maxRetries} failed:`, error.response?.data || error.message);
+      
+      // If this is the last attempt, throw the error
+      if (attempt === maxRetries) {
+        console.error('[TRANSLATION] All retry attempts exhausted');
+        throw new Error(`Translation failed after ${maxRetries} attempts: ${error.message}`);
       }
-    );
-    
-    return response.data[0]?.translations[0]?.text || text;
-  } catch (error) {
-    console.error('Translation error:', error.response?.data || error.message);
-    throw new Error('Translation failed');
+      
+      // Calculate exponential backoff delay (1s, 2s, 4s, etc.)
+      const delay = Math.pow(2, attempt - 1) * 1000;
+      console.log(`[TRANSLATION] Retrying in ${delay}ms...`);
+      await new Promise(resolve => setTimeout(resolve, delay));
+    }
   }
 };
 
-// Helper function to translate multiple texts in batch
-const translateBatch = async (texts, targetLanguage, sourceLanguage = 'en') => {
+// Helper function to translate multiple texts in batch with retry logic
+const translateBatch = async (texts, targetLanguage, sourceLanguage = 'en', maxRetries = 3) => {
   console.log(`[BATCH TRANSLATION] Starting batch translation of ${texts.length} items from ${sourceLanguage} to ${targetLanguage}`);
   console.log(`[BATCH TRANSLATION] First few items: ${texts.slice(0, 3).join(', ')}${texts.length > 3 ? '...' : ''}`);
   
-  try {
-    // Check for environment variables - try all possible environment variable names
-    const translatorKey = process.env.AZURE_TRANSLATOR_KEY || process.env.AZURE_KEY || process.env.TRANSLATOR_KEY;
-    const translatorEndpoint = process.env.AZURE_TRANSLATOR_ENDPOINT || process.env.AZURE_ENDPOINT || 'https://api.cognitive.microsofttranslator.com';
-    const translatorRegion = process.env.AZURE_TRANSLATOR_LOCATION || process.env.AZURE_REGION || 'eastus';
-    
-    // Log environment variables for debugging
-    console.log('[BATCH TRANSLATION] Environment variables check:');
-    console.log(`AZURE_TRANSLATOR_KEY: ${process.env.AZURE_TRANSLATOR_KEY ? 'defined' : 'undefined'}`);
-    console.log(`AZURE_KEY: ${process.env.AZURE_KEY ? 'defined' : 'undefined'}`);
-    console.log(`TRANSLATOR_KEY: ${process.env.TRANSLATOR_KEY ? 'defined' : 'undefined'}`);
-    
-    // Log API key (masked for security)
-    const maskedKey = translatorKey ? `${translatorKey.substring(0, 4)}...${translatorKey.substring(translatorKey.length - 4)}` : 'undefined';
-    console.log(`[BATCH TRANSLATION] Using API Key: ${maskedKey}`);
-    console.log(`[BATCH TRANSLATION] Using Endpoint: ${translatorEndpoint}`);
-    console.log(`[BATCH TRANSLATION] Using Region: ${translatorRegion}`);
-    
-    if (!translatorKey) {
-      console.error('[BATCH TRANSLATION] ERROR: Azure Translator API key is not defined in environment variables');
-      throw new Error('Azure Translator API key is missing');
-    }
-    
-    // Prepare the request body with multiple text entries
-    const requestBody = texts.map(text => ({ text }));
-    
-    console.log(`[BATCH TRANSLATION] Sending request to Azure Translator API with ${requestBody.length} items`);
-    const startTime = Date.now();
-    
-    const response = await axios.post(
-      `${translatorEndpoint}/translate?api-version=3.0&from=${sourceLanguage}&to=${targetLanguage}`,
-      requestBody,
-      {
-        headers: {
-          'Ocp-Apim-Subscription-Key': translatorKey,
-          'Ocp-Apim-Subscription-Region': translatorRegion,
-          'Content-Type': 'application/json'
+  // Check for environment variables - try all possible environment variable names
+  const translatorKey = process.env.AZURE_TRANSLATOR_KEY || process.env.AZURE_KEY || process.env.TRANSLATOR_KEY;
+  const translatorEndpoint = process.env.AZURE_TRANSLATOR_ENDPOINT || process.env.AZURE_ENDPOINT || 'https://api.cognitive.microsofttranslator.com';
+  const translatorRegion = process.env.AZURE_TRANSLATOR_LOCATION || process.env.AZURE_REGION || process.env.AZURE_API_REGION || 'eastus';
+  
+  // Log environment variables for debugging
+  console.log('[BATCH TRANSLATION] Environment variables check:');
+  console.log(`AZURE_TRANSLATOR_KEY: ${process.env.AZURE_TRANSLATOR_KEY ? 'defined' : 'undefined'}`);
+  console.log(`AZURE_KEY: ${process.env.AZURE_KEY ? 'defined' : 'undefined'}`);
+  console.log(`TRANSLATOR_KEY: ${process.env.TRANSLATOR_KEY ? 'defined' : 'undefined'}`);
+  
+  // Log API key (masked for security)
+  const maskedKey = translatorKey ? `${translatorKey.substring(0, 4)}...${translatorKey.substring(translatorKey.length - 4)}` : 'undefined';
+  console.log(`[BATCH TRANSLATION] Using API Key: ${maskedKey}`);
+  console.log(`[BATCH TRANSLATION] Using Endpoint: ${translatorEndpoint}`);
+  console.log(`[BATCH TRANSLATION] Using Region: ${translatorRegion}`);
+  
+  if (!translatorKey) {
+    console.error('[BATCH TRANSLATION] ERROR: Azure Translator API key is not defined in environment variables');
+    throw new Error('Azure Translator API key is missing');
+  }
+  
+  // Prepare the request body with multiple text entries
+  const requestBody = texts.map(text => ({ text }));
+  
+  // Retry logic with exponential backoff
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      console.log(`[BATCH TRANSLATION] Attempt ${attempt}/${maxRetries}: Sending request to Azure Translator API with ${requestBody.length} items`);
+      const startTime = Date.now();
+      
+      const response = await axios.post(
+        `${translatorEndpoint}/translate?api-version=3.0&from=${sourceLanguage}&to=${targetLanguage}`,
+        requestBody,
+        {
+          headers: {
+            'Ocp-Apim-Subscription-Key': translatorKey,
+            'Ocp-Apim-Subscription-Region': translatorRegion,
+            'Content-Type': 'application/json'
+          },
+          timeout: 30000, // 30 second timeout
+          validateStatus: function (status) {
+            return status >= 200 && status < 300; // default
+          }
         }
+      );
+      
+      const endTime = Date.now();
+      const duration = endTime - startTime;
+      
+      console.log(`[BATCH TRANSLATION] Received response from Azure Translator API in ${duration}ms`);
+      console.log(`[BATCH TRANSLATION] Response contains ${response.data.length} translated items`);
+      
+      if (response.data.length > 0) {
+        console.log(`[BATCH TRANSLATION] Sample translation: "${texts[0]}" → "${response.data[0].translations[0]?.text || ''}"`);
       }
-    );
-    
-    const endTime = Date.now();
-    const duration = endTime - startTime;
-    
-    console.log(`[BATCH TRANSLATION] Received response from Azure Translator API in ${duration}ms`);
-    console.log(`[BATCH TRANSLATION] Response contains ${response.data.length} translated items`);
-    
-    if (response.data.length > 0) {
-      console.log(`[BATCH TRANSLATION] Sample translation: "${texts[0]}" → "${response.data[0].translations[0]?.text || ''}"`);
+      
+      // Return an array of translated texts
+      return response.data.map(item => item.translations[0]?.text || '');
+      
+    } catch (error) {
+      console.error(`[BATCH TRANSLATION] Attempt ${attempt}/${maxRetries} failed:`, error.response?.data || error.message);
+      
+      if (error.response) {
+        console.error('[BATCH TRANSLATION] Status:', error.response.status);
+        console.error('[BATCH TRANSLATION] Headers:', JSON.stringify(error.response.headers));
+      }
+      
+      // If this is the last attempt, throw the error
+      if (attempt === maxRetries) {
+        console.error('[BATCH TRANSLATION] All retry attempts exhausted');
+        throw new Error(`Batch translation failed after ${maxRetries} attempts: ${error.message}`);
+      }
+      
+      // Calculate exponential backoff delay (1s, 2s, 4s, etc.)
+      const delay = Math.pow(2, attempt - 1) * 1000;
+      console.log(`[BATCH TRANSLATION] Retrying in ${delay}ms...`);
+      await new Promise(resolve => setTimeout(resolve, delay));
     }
-    
-    // Return an array of translated texts
-    return response.data.map(item => item.translations[0]?.text || '');
-  } catch (error) {
-    console.error('[BATCH TRANSLATION] Error:', error.response?.data || error.message);
-    if (error.response) {
-      console.error('[BATCH TRANSLATION] Status:', error.response.status);
-      console.error('[BATCH TRANSLATION] Headers:', JSON.stringify(error.response.headers));
-    }
-    throw new Error(`Batch translation failed: ${error.message}`);
   }
 };
 

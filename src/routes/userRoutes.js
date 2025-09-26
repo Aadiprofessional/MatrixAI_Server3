@@ -650,9 +650,17 @@ router.all('/resetPassword', async (req, res) => {
 // Helper function to deduct coins
 const deductCoins = async (uid, coinAmount, transactionName) => {
   try {
+    console.log(`[DEDUCT_COINS] Starting coin deduction for UID: ${uid}, Amount: ${coinAmount}, Transaction: ${transactionName}`);
+    
+    // Check environment variables
+    console.log(`[DEDUCT_COINS] Environment check - SUPABASE_URL: ${process.env.SUPABASE_URL ? 'SET' : 'NOT SET'}`);
+    console.log(`[DEDUCT_COINS] Environment check - SUPABASE_ANON_KEY: ${process.env.SUPABASE_ANON_KEY ? 'SET' : 'NOT SET'}`);
+    
     const supabase = getSupabaseClient();
+    console.log(`[DEDUCT_COINS] Supabase client initialized successfully`);
 
     // Step 1: Fetch user details
+    console.log(`[DEDUCT_COINS] Fetching user details for UID: ${uid}`);
     const { data: userData, error: userError } = await supabase
       .from('users')
       .select('user_coins')
@@ -660,9 +668,12 @@ const deductCoins = async (uid, coinAmount, transactionName) => {
       .single();
 
     if (userError) {
-      console.error('Error fetching user:', userError);
+      console.error('[DEDUCT_COINS] Error fetching user:', userError);
+      console.error('[DEDUCT_COINS] Error details:', JSON.stringify(userError, null, 2));
       return { success: false, message: 'Failed to fetch user information' };
     }
+
+    console.log(`[DEDUCT_COINS] User data retrieved:`, userData);
 
     const { user_coins } = userData;
 
@@ -731,7 +742,15 @@ const deductCoins = async (uid, coinAmount, transactionName) => {
 
     return { success: true, message: 'Coins subtracted successfully' };
   } catch (error) {
-    console.error('Error in deductCoins:', error);
+    console.error('[DEDUCT_COINS] Exception in deductCoins:', error);
+    console.error('[DEDUCT_COINS] Error stack:', error.stack);
+    console.error('[DEDUCT_COINS] Error message:', error.message);
+    
+    // Check if it's a Supabase configuration error
+    if (error.message && error.message.includes('Missing Supabase configuration')) {
+      return { success: false, message: 'Database configuration error' };
+    }
+    
     return { success: false, message: 'Internal server error' };
   }
 };
@@ -825,10 +844,15 @@ router.all('/subtractCoins', async (req, res) => {
       return res.status(400).json({ error: 'Missing required fields: uid, coinAmount, transaction_name' });
     }
 
+    console.log('[SUBTRACT_COINS] Calling deductCoins function...');
     const result = await deductCoins(uid, coinAmount, transaction_name);
+    console.log('[SUBTRACT_COINS] deductCoins result:', result);
+    
     res.json(result);
+    console.log('[SUBTRACT_COINS] Response sent successfully');
   } catch (error) {
-    console.error('Error in subtractCoins:', error);
+    console.error('[SUBTRACT_COINS] Error in subtractCoins:', error);
+    console.error('[SUBTRACT_COINS] Error stack:', error.stack);
     res.status(500).json({ error: 'Internal server error' });
   }
 });
