@@ -17,11 +17,11 @@ services:
       function:
         name: main
         description: Main HTTP handler
-        runtime: nodejs18
+        runtime: nodejs20
         codeUri: ./
         handler: index.handler
-        memorySize: 1024
-        timeout: 900
+        memorySize: 2048
+        timeout: 600
         environmentVariables:
           ENVIRONMENT: production
           NODE_ENV: production

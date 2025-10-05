@@ -7,6 +7,7 @@ const axios = require("axios");
 const multer = require("multer");
 const path = require("path");
 const fs = require("fs");
+const { createTimezoneAwareTimestamp } = require('../utils/timezone.js');
 // fetch is available globally in Node.js 18+
 
 // Configure multer for memory storage
@@ -27,13 +28,93 @@ const upload = multer({
 
 const router = express.Router();
 
+// Function to validate and normalize content types for DashScope API
+function validateAndNormalizeContentType(contentType, filename = '') {
+  // DashScope API supports: image/jpeg, image/png, image/gif, image/webp
+  const supportedTypes = {
+    'image/jpeg': 'image/jpeg',
+    'image/jpg': 'image/jpeg', // This is not a standard MIME type, but handle it
+    'image/png': 'image/png',
+    'image/gif': 'image/gif',
+    'image/webp': 'image/webp'
+  };
+  
+  // Normalize the content type - remove any charset or other parameters
+  let normalizedType = '';
+  if (contentType) {
+    normalizedType = contentType.toLowerCase().trim().split(';')[0];
+  }
+  
+  // Check if it's directly supported
+  if (supportedTypes[normalizedType]) {
+    return supportedTypes[normalizedType];
+  }
+  
+  // If not supported, try to infer from filename extension
+  if (filename) {
+    const ext = path.extname(filename).toLowerCase();
+    switch (ext) {
+      case '.jpg':
+      case '.jpeg':
+        return 'image/jpeg';
+      case '.png':
+        return 'image/png';
+      case '.gif':
+        return 'image/gif';
+      case '.webp':
+        return 'image/webp';
+    }
+  }
+  
+  // Default to JPEG if we can't determine
+  console.warn(`Unsupported content type: ${contentType}, defaulting to image/jpeg`);
+  return 'image/jpeg';
+}
+
+// Function to validate image buffer and ensure it's properly formatted
+function validateImageBuffer(buffer, contentType) {
+  if (!buffer || buffer.length === 0) {
+    throw new Error('Empty image buffer');
+  }
+  
+  // Check for common image file signatures
+  const signatures = {
+    'image/jpeg': [0xFF, 0xD8, 0xFF],
+    'image/png': [0x89, 0x50, 0x4E, 0x47],
+    'image/gif': [0x47, 0x49, 0x46],
+    'image/webp': [0x52, 0x49, 0x46, 0x46] // RIFF header for WebP
+  };
+  
+  const signature = signatures[contentType];
+  if (signature) {
+    for (let i = 0; i < signature.length; i++) {
+      if (buffer[i] !== signature[i]) {
+        console.warn(`Image buffer signature mismatch for ${contentType}`);
+        break;
+      }
+    }
+  }
+  
+  return true;
+}
+
 // Helper function to deduct coins
-const deductCoins = async (uid, coinAmount, transactionName) => {
+const deductCoins = async (uid, coinAmount, transactionName, req = null) => {
   try {
+    // Get timezone-aware timestamp for coin deduction
+    const timestampInfo = req ? createTimezoneAwareTimestamp(req) : {
+      timestamp: new Date().toISOString(),
+      timezone: 'UTC',
+      localTime: new Date().toISOString(),
+      utcTime: new Date().toISOString()
+    };
+    
     const response = await axios.post('https://main-matrixai-server-lujmidrakh.cn-hangzhou.fcapp.run/api/user/subtractCoins', {
       uid,
       coinAmount,
       transaction_name: transactionName,
+      timestamp: timestampInfo.timestamp,
+      timezone: timestampInfo.timezone,
     });
     return response.data;
   } catch (err) {
@@ -546,7 +627,7 @@ router.post('/createVideo', upload.single('image'), async (req, res) => {
     const isPremiumTemplate = template && premiumTemplates.includes(template);
     
     // Determine coin cost based on template
-    const coinCost = isPremiumTemplate ? 55 : 30;
+    const coinCost = isPremiumTemplate ? 55 : 35;
     
     // Determine transaction name based on input type
     let transactionName;
@@ -563,7 +644,7 @@ router.post('/createVideo', upload.single('image'), async (req, res) => {
     // Deduct coins
     try {
       console.log(`Attempting to deduct ${coinCost} coins for ${transactionName}`);
-      const deductionResult = await deductCoins(uid, coinCost, transactionName);
+      const deductionResult = await deductCoins(uid, coinCost, transactionName, req);
       if (!deductionResult.success) {
         console.log('Coin deduction failed, but continuing for testing purposes');
         // For testing purposes, we'll continue even if coin deduction fails
@@ -639,8 +720,20 @@ router.post('/createVideo', upload.single('image'), async (req, res) => {
         
         uploadedImageUrl = uploadResult.url;
         imageBuffer = req.file.buffer;
-        imageContentType = uploadResult.contentType;
+        // Use the actual mimetype from the uploaded file and validate it
+        const rawContentType = req.file.mimetype || uploadResult.contentType;
+        imageContentType = validateAndNormalizeContentType(rawContentType, req.file.originalname);
+        
+        // Validate the image buffer
+        try {
+          validateImageBuffer(imageBuffer, imageContentType);
+          console.log('Image buffer validation passed');
+        } catch (validationError) {
+          console.warn('Image buffer validation warning:', validationError.message);
+        }
+        
         console.log('Image uploaded successfully to:', uploadedImageUrl);
+        console.log('Raw content type:', rawContentType, '-> Normalized:', imageContentType);
       } catch (fileProcessingError) {
         console.error('Exception during file processing:', fileProcessingError);
         return res.status(500).json({ 
@@ -651,6 +744,46 @@ router.post('/createVideo', upload.single('image'), async (req, res) => {
     }
     
     const finalImageUrl = uploadedImageUrl || imageUrl;
+    
+    // If we have an imageUrl but no imageBuffer, download the image and convert to base64
+    if (finalImageUrl && !imageBuffer) {
+      try {
+        console.log('Downloading image from URL for base64 conversion:', finalImageUrl);
+        const imageResponse = await fetch(finalImageUrl);
+        
+        if (!imageResponse.ok) {
+          console.error('Failed to download image:', imageResponse.status, imageResponse.statusText);
+          return res.status(400).json({ 
+            error: 'Failed to download image from URL', 
+            details: `HTTP ${imageResponse.status}: ${imageResponse.statusText}` 
+          });
+        }
+        
+        const imageArrayBuffer = await imageResponse.arrayBuffer();
+        imageBuffer = Buffer.from(imageArrayBuffer);
+        
+        // Determine content type from response headers and validate it
+        const rawContentType = imageResponse.headers.get('content-type') || 'image/jpeg';
+        imageContentType = validateAndNormalizeContentType(rawContentType, finalImageUrl);
+        
+        // Validate the downloaded image buffer
+        try {
+          validateImageBuffer(imageBuffer, imageContentType);
+          console.log('Downloaded image buffer validation passed');
+        } catch (validationError) {
+          console.warn('Downloaded image buffer validation warning:', validationError.message);
+        }
+        
+        console.log(`Successfully downloaded image: ${imageBuffer.length} bytes`);
+        console.log('Raw content type:', rawContentType, '-> Normalized:', imageContentType);
+      } catch (downloadError) {
+        console.error('Exception downloading image from URL:', downloadError);
+        return res.status(500).json({ 
+          error: 'Failed to download image from URL', 
+          details: downloadError.message 
+        });
+      }
+    }
     
     // Case 1: Prompt to Video (Text-to-Video)
     if (promptText && !finalImageUrl && !template) {
@@ -677,37 +810,28 @@ router.post('/createVideo', upload.single('image'), async (req, res) => {
       // Determine model based on template type
       const model = isPremiumTemplate ? "wanx2.1-i2v-plus" : "wanx2.1-i2v-turbo";
       
-      // Prepare request body - prefer base64 encoding when we have the image buffer
-      if (imageBuffer) {
-        // Convert image buffer to base64
-        const base64Image = imageBuffer.toString('base64');
-        requestBody = {
-          model: model,
-          input: {
-            prompt: "", // Empty prompt for template-based videos
-            img_url: `data:${imageContentType};base64,${base64Image}`,
-            template: template
-          },
-          parameters: {
-            resolution: size
-          }
-        };
-        console.log('Using base64 encoded image for API request');
-      } else {
-        // Fall back to URL if we don't have the buffer
-        requestBody = {
-          model: model,
-          input: {
-            prompt: "", // Empty prompt for template-based videos
-            img_url: finalImageUrl,
-            template: template
-          },
-          parameters: {
-            resolution: size
-          }
-        };
-        console.log('Using image URL for API request');
+      // Convert image buffer to base64 (we always have imageBuffer now)
+      // Ensure clean base64 encoding without any BOM or invalid characters
+      const base64Image = imageBuffer.toString('base64').replace(/[\r\n\s]/g, '');
+      
+      // Validate base64 string
+      if (!base64Image || base64Image.length === 0) {
+        throw new Error('Failed to generate valid base64 image data');
       }
+      
+      requestBody = {
+        model: model,
+        input: {
+          prompt: "", // Empty prompt for template-based videos
+          img_url: `data:${imageContentType};base64,${base64Image}`,
+          template: template
+        },
+        parameters: {
+          resolution: size
+        }
+      };
+      console.log('Using base64 encoded image for API request');
+      console.log(`Base64 image data length: ${base64Image.length} characters`);
       
       // Use DASHSCOPE_API_KEY for image-to-video models
       apiKey = process.env.DASHSCOPE_API_KEY;
@@ -716,37 +840,28 @@ router.post('/createVideo', upload.single('image'), async (req, res) => {
     else if (finalImageUrl && !template) {
       console.log('Processing Image-to-Video request');
       
-      // Prepare request body - prefer base64 encoding when we have the image buffer
-      if (imageBuffer) {
-        // Convert image buffer to base64
-        const base64Image = imageBuffer.toString('base64');
-        requestBody = {
-          model: "wanx2.1-i2v-turbo",
-          input: {
-            prompt: promptText || "",
-            img_url: `data:${imageContentType};base64,${base64Image}`
-          },
-          parameters: {
-            resolution: size,
-            prompt_extend: true
-          }
-        };
-        console.log('Using base64 encoded image for API request');
-      } else {
-        // Fall back to URL if we don't have the buffer
-        requestBody = {
-          model: "wanx2.1-i2v-turbo",
-          input: {
-            prompt: promptText || "",
-            img_url: finalImageUrl
-          },
-          parameters: {
-            resolution: size,
-            prompt_extend: true
-          }
-        };
-        console.log('Using image URL for API request');
+      // Convert image buffer to base64 (we always have imageBuffer now)
+      // Ensure clean base64 encoding without any BOM or invalid characters
+      const base64Image = imageBuffer.toString('base64').replace(/[\r\n\s]/g, '');
+      
+      // Validate base64 string
+      if (!base64Image || base64Image.length === 0) {
+        throw new Error('Failed to generate valid base64 image data');
       }
+      
+      requestBody = {
+        model: "wanx2.1-i2v-turbo",
+        input: {
+          prompt: promptText || "",
+          img_url: `data:${imageContentType};base64,${base64Image}`
+        },
+        parameters: {
+          resolution: size,
+          prompt_extend: true
+        }
+      };
+      console.log('Using base64 encoded image for API request');
+      console.log(`Base64 image data length: ${base64Image.length} characters`);
       
       // Use DASHSCOPE_API_KEY for image-to-video models
       apiKey = process.env.DASHSCOPE_API_KEY;
@@ -756,6 +871,9 @@ router.post('/createVideo', upload.single('image'), async (req, res) => {
     
     // Save initial metadata to database
     const supabase = getSupabaseClient();
+    
+    // Get timezone-aware timestamp for video creation
+    const videoTimestampInfo = createTimezoneAwareTimestamp(req);
     
     try {
       const { error: insertError } = await supabase
@@ -767,8 +885,9 @@ router.post('/createVideo', upload.single('image'), async (req, res) => {
           size,
           template,
           status: 'processing',
-          created_at: new Date().toISOString(),
-          updated_at: new Date().toISOString(),
+          created_at: videoTimestampInfo.timestamp,
+          updated_at: videoTimestampInfo.timestamp,
+          timezone: videoTimestampInfo.timezone,
           video_id: videoId
         });
       
@@ -831,6 +950,10 @@ router.post('/createVideo', upload.single('image'), async (req, res) => {
         errorMessage = 'Rate limit exceeded. Please try again later.';
       } else if (response.status === 400 && errorDetails.includes('Download the media resource timed out')) {
         errorMessage = 'The image could not be accessed by the API. Please check if the image is publicly accessible.';
+      } else if (response.status === 400 && errorDetails.includes('InvalidParameter.DataInspection')) {
+        errorMessage = 'The image format is not supported or incorrect. Please ensure the image is a valid JPEG, PNG, GIF, or WebP file.';
+        console.error('Image format validation failed. Content type used:', imageContentType);
+        console.error('Image buffer size:', imageBuffer ? imageBuffer.length : 'No buffer');
       }
       
       // Update database with error status

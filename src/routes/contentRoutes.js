@@ -106,10 +106,63 @@ router.post('/saveContent', async (req, res) => {
   }
 });
 
-// Get user's content history
-router.get('/getUserContent', async (req, res) => {
+// Get user content history with pagination and search
+router.all('/getUserContent', async (req, res) => {
   try {
-    const { uid, page = 1, itemsPerPage = 10, contentType, searchQuery } = req.query;
+    // Handle OPTIONS requests for CORS preflight
+    if (req.method === 'OPTIONS') {
+      return res.status(200).end();
+    }
+
+    console.log('getUserContent endpoint called');
+    console.log('Request method:', req.method);
+    console.log('Request query:', req.query);
+    console.log('Request body:', req.body);
+
+    // Parse request body for POST requests
+    let parsedBody = {};
+    
+    if (req.parsedBody && typeof req.parsedBody === 'object') {
+      parsedBody = req.parsedBody;
+    } else if (req.bodyJSON && typeof req.bodyJSON === 'object') {
+      parsedBody = req.bodyJSON;
+    } else if (req.body) {
+      if (typeof req.body === 'object' && !Buffer.isBuffer(req.body)) {
+        parsedBody = req.body;
+      } else if (typeof req.body === 'string') {
+        try {
+          parsedBody = JSON.parse(req.body);
+        } catch (parseError) {
+          console.error('Error parsing string body:', parseError);
+        }
+      } else if (Buffer.isBuffer(req.body)) {
+        try {
+          const bufferString = req.body.toString('utf8');
+          parsedBody = JSON.parse(bufferString);
+        } catch (parseError) {
+          console.error('Error parsing buffer body:', parseError);
+        }
+      }
+    }
+
+    // Support both GET and POST methods
+    let uid, page, itemsPerPage, contentType, searchQuery;
+    
+    if (req.method === 'GET') {
+      ({ uid, page = 1, itemsPerPage = 10, contentType, searchQuery } = req.query);
+    } else {
+      // For POST, try multiple sources in order of preference
+      uid = parsedBody.uid || 
+            (req.parsedBody && req.parsedBody.uid) || 
+            (req.body && req.body.uid) || 
+            (req.bodyJSON && req.bodyJSON.uid);
+      page = parsedBody.page || 1;
+      itemsPerPage = parsedBody.itemsPerPage || 10;
+      contentType = parsedBody.contentType;
+      searchQuery = parsedBody.searchQuery;
+    }
+
+    console.log('Extracted parameters:', { uid, page, itemsPerPage, contentType, searchQuery });
 
     // Validate input
     if (!uid) {

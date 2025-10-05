@@ -4,6 +4,7 @@ const axios = require('axios');
 const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
 const { v4: uuidv4 } = require('uuid');
+const { createTimezoneAwareTimestamp } = require('../utils/timezone');
 
 const router = express.Router();
 
@@ -11,9 +12,17 @@ const router = express.Router();
 const JWT_SECRET = process.env.JWT_SECRET || 'P8sG4xe6FfDrMEFJhX0g2zRLIykNtEnVcUxQjylt0lUU6K6bchpT39AQNpesdtNnspEOX+AD7UHEOtb0tHJ77A==';
 
 // Helper function to add coins to user account
-const addCoins = async (uid, coinAmount, transactionName) => {
+const addCoins = async (uid, coinAmount, transactionName, req = null) => {
   try {
     const supabase = getSupabaseClient();
+
+    // Get timezone-aware timestamp for transaction logging
+    const timestampInfo = req ? createTimezoneAwareTimestamp(req) : {
+      timestamp: new Date().toISOString(),
+      timezone: 'UTC',
+      localTime: new Date().toISOString(),
+      utcTime: new Date().toISOString()
+    };
 
     // Step 1: Fetch user details
     const { data: userData, error: userError } = await supabase
@@ -41,7 +50,7 @@ const addCoins = async (uid, coinAmount, transactionName) => {
       return { success: false, message: 'Failed to update user coins' };
     }
 
-    // Step 3: Log successful transaction
+    // Step 3: Log successful transaction with timezone-aware timestamp
     await supabase
       .from('user_transaction')
       .insert([{
@@ -50,7 +59,8 @@ const addCoins = async (uid, coinAmount, transactionName) => {
         coin_amount: coinAmount,
         remaining_coins: updatedCoins,
         status: 'success',
-        time: new Date().toISOString()
+        time: timestampInfo.timestamp,
+        timezone: timestampInfo.timezone
       }]);
 
     return { success: true, message: 'Coins added successfully', newBalance: updatedCoins };
@@ -648,7 +658,7 @@ router.all('/resetPassword', async (req, res) => {
 });
 
 // Helper function to deduct coins
-const deductCoins = async (uid, coinAmount, transactionName) => {
+const deductCoins = async (uid, coinAmount, transactionName, req = null) => {
   try {
     console.log(`[DEDUCT_COINS] Starting coin deduction for UID: ${uid}, Amount: ${coinAmount}, Transaction: ${transactionName}`);
     
@@ -658,6 +668,14 @@ const deductCoins = async (uid, coinAmount, transactionName) => {
     
     const supabase = getSupabaseClient();
     console.log(`[DEDUCT_COINS] Supabase client initialized successfully`);
+
+    // Get timezone-aware timestamp for transaction logging
+    const timestampInfo = req ? createTimezoneAwareTimestamp(req) : {
+      timestamp: new Date().toISOString(),
+      timezone: 'UTC',
+      localTime: new Date().toISOString(),
+      utcTime: new Date().toISOString()
+    };
 
     // Step 1: Fetch user details
     console.log(`[DEDUCT_COINS] Fetching user details for UID: ${uid}`);
@@ -679,18 +697,7 @@ const deductCoins = async (uid, coinAmount, transactionName) => {
 
     // Step 2: Check if the user has enough coins
     if (user_coins < coinAmount) {
-      // Log failed transaction
-      const chinaTime = new Date().toLocaleString('en-CA', {
-        timeZone: 'Asia/Shanghai',
-        year: 'numeric',
-        month: '2-digit',
-        day: '2-digit',
-        hour: '2-digit',
-        minute: '2-digit',
-        second: '2-digit',
-        hour12: false
-      }).replace(', ', 'T') + '.000Z';
-      
+      // Log failed transaction with timezone-aware timestamp
       await supabase
         .from('user_transaction')
         .insert([{
@@ -699,7 +706,8 @@ const deductCoins = async (uid, coinAmount, transactionName) => {
           coin_amount: coinAmount,
           remaining_coins: user_coins,
           status: 'failed',
-          time: chinaTime
+          time: timestampInfo.timestamp,
+          timezone: timestampInfo.timezone
         }]);
 
       return { success: false, message: 'Insufficient coins. Please buy more coins.' };
@@ -717,18 +725,7 @@ const deductCoins = async (uid, coinAmount, transactionName) => {
       return { success: false, message: 'Failed to update user coins' };
     }
 
-    // Step 4: Log successful transaction
-    const chinaTime = new Date().toLocaleString('en-CA', {
-      timeZone: 'Asia/Shanghai',
-      year: 'numeric',
-      month: '2-digit',
-      day: '2-digit',
-      hour: '2-digit',
-      minute: '2-digit',
-      second: '2-digit',
-      hour12: false
-    }).replace(', ', 'T') + '.000Z';
-    
+    // Step 4: Log successful transaction with timezone-aware timestamp
     await supabase
       .from('user_transaction')
       .insert([{
@@ -737,7 +734,8 @@ const deductCoins = async (uid, coinAmount, transactionName) => {
         coin_amount: coinAmount,
         remaining_coins: updatedCoins,
         status: 'success',
-        time: chinaTime
+        time: timestampInfo.timestamp,
+        timezone: timestampInfo.timezone
       }]);
 
     return { success: true, message: 'Coins subtracted successfully' };
@@ -845,7 +843,7 @@ router.all('/subtractCoins', async (req, res) => {
     }
 
     console.log('[SUBTRACT_COINS] Calling deductCoins function...');
-    const result = await deductCoins(uid, coinAmount, transaction_name);
+    const result = await deductCoins(uid, coinAmount, transaction_name, req);
     console.log('[SUBTRACT_COINS] deductCoins result:', result);
     
     res.json(result);

@@ -6,6 +6,7 @@ const { createClient } = require('@supabase/supabase-js');
 const fs = require('fs');
 const path = require('path');
 const sharp = require('sharp');
+const { createTimezoneAwareTimestamp } = require('../utils/timezone.js');
 
 const router = express.Router();
 
@@ -18,12 +19,22 @@ const getSupabaseClient = () => {
 };
 
 // === Coin deduction helper ===
-const deductCoins = async (uid, coinAmount, transactionName) => {
+const deductCoins = async (uid, coinAmount, transactionName, req = null) => {
   try {
+    // Get timezone-aware timestamp for coin deduction
+    const timestampInfo = req ? createTimezoneAwareTimestamp(req) : {
+      timestamp: new Date().toISOString(),
+      timezone: 'UTC',
+      localTime: new Date().toISOString(),
+      utcTime: new Date().toISOString()
+    };
+    
     const response = await axios.post('https://main-matrixai-server-lujmidrakh.cn-hangzhou.fcapp.run/api/user/subtractCoins', {
       uid,
       coinAmount,
       transaction_name: transactionName,
+      timestamp: timestampInfo.timestamp,
+      timezone: timestampInfo.timezone,
     });
     return response.data;
   } catch (err) {
@@ -461,7 +472,7 @@ router.post('/generateImageFromDescription', async (req, res) => {
     console.log(`Description: ${description}`);
 
     // Deduct coins
-    const coinResult = await deductCoins(uid, coinCost, 'AI Image Generation');
+    const coinResult = await deductCoins(uid, coinCost, 'AI Image Generation', req);
     if (!coinResult.success) {
       return res.status(402).json({
         success: false,
@@ -524,12 +535,16 @@ router.post('/generateImageFromDescription', async (req, res) => {
       // Step 4: Save metadata to database (optional)
       const supabase = getSupabaseClient();
       try {
+        // Get timezone-aware timestamp for AI image generation
+        const aiImageTimestampInfo = createTimezoneAwareTimestamp(req);
+        
         const insertData = {
           id: imageId,
           uid: uid,
           description: description,
           image_url: imageUrl,
-          created_at: new Date().toISOString()
+          created_at: aiImageTimestampInfo.timestamp,
+          timezone: aiImageTimestampInfo.timezone
         };
         
         // Add appropriate data based on generation type

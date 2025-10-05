@@ -70,6 +70,36 @@ const setupEnvironment = () => {
 // Initialize environment
 setupEnvironment();
 
+// Add process monitoring and error handling
+process.on('uncaughtException', (error) => {
+  console.error('Uncaught Exception:', error);
+  console.error('Stack:', error.stack);
+  // Don't exit in serverless environment, just log
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('Unhandled Rejection at:', promise, 'reason:', reason);
+  // Don't exit in serverless environment, just log
+});
+
+// Monitor memory usage
+if (process.env.NODE_ENV === 'production') {
+  setInterval(() => {
+    const memUsage = process.memoryUsage();
+    const memUsageMB = {
+      rss: Math.round(memUsage.rss / 1024 / 1024),
+      heapTotal: Math.round(memUsage.heapTotal / 1024 / 1024),
+      heapUsed: Math.round(memUsage.heapUsed / 1024 / 1024),
+      external: Math.round(memUsage.external / 1024 / 1024)
+    };
+    
+    // Log memory usage if it's getting high
+    if (memUsageMB.heapUsed > 1500) { // Alert if heap usage > 1.5GB
+      console.warn('High memory usage detected:', memUsageMB);
+    }
+  }, 30000); // Check every 30 seconds
+}
+
 // CORS configuration for frontend integration
 const corsOptions = {
   origin: [

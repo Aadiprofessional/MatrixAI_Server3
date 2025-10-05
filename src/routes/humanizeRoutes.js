@@ -4,6 +4,7 @@ const axios = require("axios");
 const uuid = require("uuid");
 const uuidv4 = uuid.v4;
 const { createClient } = require("@supabase/supabase-js");
+const { createTimezoneAwareTimestamp } = require('../utils/timezone');
 
 const router = express.Router();
 
@@ -16,12 +17,22 @@ const getSupabaseClient = () => {
 };
 
 // === Coin deduction helper ===
-const deductCoins = async (uid, coinAmount, transactionName) => {
+const deductCoins = async (uid, coinAmount, transactionName, req = null) => {
   try {
+    // Get timezone-aware timestamp for coin deduction
+    const timestampInfo = req ? createTimezoneAwareTimestamp(req) : {
+      timestamp: new Date().toISOString(),
+      timezone: 'UTC',
+      localTime: new Date().toISOString(),
+      utcTime: new Date().toISOString()
+    };
+    
     const response = await axios.post('https://main-matrixai-server-lujmidrakh.cn-hangzhou.fcapp.run/api/user/subtractCoins', {
       uid,
       coinAmount,
       transaction_name: transactionName,
+      timestamp: timestampInfo.timestamp,
+      timezone: timestampInfo.timezone,
     });
     return response.data;
   } catch (err) {
@@ -69,7 +80,7 @@ router.post('/createHumanization', async (req, res) => {
     const { data: user, error: userError } = await supabase.from('users').select('uid').eq('uid', uid).single();
     if (userError || !user) return res.status(400).json({ message: 'User not found' });
 
-    const deductResult = await deductCoins(uid, actualCoinCost, 'humanization_generation');
+    const deductResult = await deductCoins(uid, actualCoinCost, 'humanization_generation', req);
     if (!deductResult.success) return res.status(400).json({ message: deductResult.message });
 
     // Call StealthGPT API directly with dynamic parameters

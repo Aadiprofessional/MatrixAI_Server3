@@ -2,11 +2,12 @@ const express = require("express");
 const { getSupabaseClient } = require("../config/database.js");
 const { v4: uuidv4 } = require("uuid");
 const axios = require('axios');
+const { createTimezoneAwareTimestamp } = require('../utils/timezone');
 
 const router = express.Router();
 
 // Helper function to deduct coins using the subtractCoins API
-const deductCoins = async (uid, coinAmount, transactionName) => {
+const deductCoins = async (uid, coinAmount, transactionName, req = null) => {
   // Development mode bypass - if NODE_ENV is development or if BYPASS_COIN_DEDUCTION is set
   const isDevelopment = process.env.NODE_ENV === 'development' || process.env.BYPASS_COIN_DEDUCTION === 'true';
   
@@ -18,10 +19,20 @@ const deductCoins = async (uid, coinAmount, transactionName) => {
   try {
     console.log(`[COIN DEDUCTION] Attempting to deduct ${coinAmount} coins for ${transactionName} (UID: ${uid})`);
     
+    // Get timezone-aware timestamp for coin deduction
+    const timestampInfo = req ? createTimezoneAwareTimestamp(req) : {
+      timestamp: new Date().toISOString(),
+      timezone: 'UTC',
+      localTime: new Date().toISOString(),
+      utcTime: new Date().toISOString()
+    };
+    
     const response = await axios.post('https://main-matrixai-server-lujmidrakh.cn-hangzhou.fcapp.run/api/user/subtractCoins', {
       uid,
       coinAmount,
       transaction_name: transactionName,
+      timestamp: timestampInfo.timestamp,
+      timezone: timestampInfo.timezone,
     }, {
       timeout: 10000, // 10 second timeout
       headers: {
@@ -189,7 +200,7 @@ router.all('/uploadAudioUrl', async (req, res) => {
     console.log(`Audio duration: ${duration} seconds (${durationInMinutes} minutes), coin cost: ${coinCost}`);
 
     // Check and deduct coins before processing
-    const coinResult = await deductCoins(uid, coinCost, 'Audio Transcription');
+    const coinResult = await deductCoins(uid, coinCost, 'Audio Transcription', req);
     if (!coinResult.success) {
       console.log('Coin deduction failed:', coinResult.message);
       return res.status(400).json({ 
@@ -207,6 +218,9 @@ router.all('/uploadAudioUrl', async (req, res) => {
     // Initialize Supabase client
     const supabase = getSupabaseClient();
 
+    // Get timezone-aware timestamp for audio metadata
+    const audioTimestampInfo = createTimezoneAwareTimestamp(req);
+    
     // Save the audio metadata to the database with 'processing' status
     const { error: insertError } = await supabase
       .from('audio_metadata')
@@ -220,16 +234,8 @@ router.all('/uploadAudioUrl', async (req, res) => {
         language,
         duration,
         status: 'processing',
-        uploaded_at: new Date().toLocaleString('en-CA', {
-          timeZone: 'Asia/Shanghai',
-          year: 'numeric',
-          month: '2-digit',
-          day: '2-digit',
-          hour: '2-digit',
-          minute: '2-digit',
-          second: '2-digit',
-          hour12: false
-        }).replace(', ', 'T') + '.000Z'
+        uploaded_at: audioTimestampInfo.timestamp,
+        timezone: audioTimestampInfo.timezone
       });
 
     if (insertError) {
@@ -946,6 +952,75 @@ const translateText = async (text, targetLanguage, sourceLanguage = 'en', maxRet
   }
 };
 
+// Helper function to translate large transcriptions by chunking them intelligently
+const translateLargeTranscription = async (transcription, targetLanguage, sourceLanguage = 'en') => {
+  // Azure Translator limit is ~50,000 characters, but we'll use 40,000 to be safe
+  const MAX_CHUNK_SIZE = 40000;
+  
+  // If transcription is small enough, use regular translation
+  if (transcription.length <= MAX_CHUNK_SIZE) {
+    return await translateText(transcription, targetLanguage, sourceLanguage);
+  }
+  
+  console.log(`[TRANSCRIPTION] Large transcription detected (${transcription.length} chars). Chunking for translation...`);
+  
+  // Split transcription into chunks at sentence boundaries to preserve context
+  const chunks = [];
+  let currentChunk = '';
+  
+  // Split by sentences (periods, exclamation marks, question marks)
+  const sentences = transcription.split(/([.!?]+\s+)/);
+  
+  for (let i = 0; i < sentences.length; i++) {
+    const sentence = sentences[i];
+    
+    // If adding this sentence would exceed the limit, save current chunk and start new one
+    if (currentChunk.length + sentence.length > MAX_CHUNK_SIZE && currentChunk.length > 0) {
+      chunks.push(currentChunk.trim());
+      currentChunk = sentence;
+    } else {
+      currentChunk += sentence;
+    }
+  }
+  
+  // Add the last chunk if it has content
+  if (currentChunk.trim().length > 0) {
+    chunks.push(currentChunk.trim());
+  }
+  
+  console.log(`[TRANSCRIPTION] Split into ${chunks.length} chunks for translation`);
+  
+  // Translate each chunk in parallel with controlled concurrency
+  const maxConcurrency = 3; // Conservative concurrency for large texts
+  const translatedChunks = [];
+  
+  for (let i = 0; i < chunks.length; i += maxConcurrency) {
+    const batch = chunks.slice(i, i + maxConcurrency);
+    const batchPromises = batch.map(async (chunk, index) => {
+      const chunkIndex = i + index;
+      console.log(`[TRANSCRIPTION] Translating chunk ${chunkIndex + 1}/${chunks.length} (${chunk.length} chars)`);
+      
+      try {
+        const translated = await translateText(chunk, targetLanguage, sourceLanguage);
+        console.log(`[TRANSCRIPTION] Chunk ${chunkIndex + 1} translated successfully`);
+        return translated;
+      } catch (error) {
+        console.error(`[TRANSCRIPTION] Error translating chunk ${chunkIndex + 1}:`, error);
+        return chunk; // Fallback to original text
+      }
+    });
+    
+    const batchResults = await Promise.all(batchPromises);
+    translatedChunks.push(...batchResults);
+  }
+  
+  // Reassemble the translated chunks
+  const finalTranslation = translatedChunks.join(' ');
+  console.log(`[TRANSCRIPTION] Large transcription translation completed. Final length: ${finalTranslation.length} chars`);
+  
+  return finalTranslation;
+};
+
 // Helper function to translate multiple texts in batch with retry logic
 const translateBatch = async (texts, targetLanguage, sourceLanguage = 'en', maxRetries = 3) => {
   console.log(`[BATCH TRANSLATION] Starting batch translation of ${texts.length} items from ${sourceLanguage} to ${targetLanguage}`);
@@ -1033,6 +1108,158 @@ const translateBatch = async (texts, targetLanguage, sourceLanguage = 'en', maxR
   }
 };
 
+// Optimized parallel batch translation function
+// In-memory cache for translations (cleared every hour to prevent memory leaks)
+const translationCache = new Map();
+let cacheLastCleared = Date.now();
+
+const clearCacheIfNeeded = () => {
+  const now = Date.now();
+  if (now - cacheLastCleared > 3600000) { // 1 hour
+    translationCache.clear();
+    cacheLastCleared = now;
+    console.log('[CACHE] Translation cache cleared after 1 hour');
+  }
+};
+
+const getCacheKey = (text, targetLanguage, sourceLanguage) => {
+  return `${sourceLanguage}:${targetLanguage}:${text}`;
+};
+
+const translateBatchesUltraFast = async (texts, targetLanguage, sourceLanguage = 'en') => {
+  clearCacheIfNeeded();
+  
+  const totalTexts = texts.length;
+  console.log(`[ULTRA-FAST TRANSLATION] Starting ultra-optimized translation of ${totalTexts} items`);
+  
+  // Fixed configuration as requested: 500-word batches with up to 10 parallel processes
+  const batchSize = 500;
+  const maxConcurrency = 10;
+  
+  console.log(`[ULTRA-FAST TRANSLATION] Fixed config: batchSize=${batchSize}, maxConcurrency=${maxConcurrency}`);
+  
+  // Check cache for existing translations
+  const cachedResults = [];
+  const uncachedTexts = [];
+  const uncachedIndices = [];
+  
+  texts.forEach((text, index) => {
+    const cacheKey = getCacheKey(text, targetLanguage, sourceLanguage);
+    const cached = translationCache.get(cacheKey);
+    
+    if (cached) {
+      cachedResults[index] = cached;
+    } else {
+      uncachedTexts.push(text);
+      uncachedIndices.push(index);
+    }
+  });
+  
+  const cacheHitRate = ((totalTexts - uncachedTexts.length) / totalTexts * 100).toFixed(1);
+  console.log(`[ULTRA-FAST TRANSLATION] Cache hit rate: ${cacheHitRate}% (${totalTexts - uncachedTexts.length}/${totalTexts} cached)`);
+  
+  if (uncachedTexts.length === 0) {
+    console.log(`[ULTRA-FAST TRANSLATION] All texts found in cache, returning immediately`);
+    return cachedResults;
+  }
+  
+  // Create batches for uncached texts
+  const batches = [];
+  for (let i = 0; i < uncachedTexts.length; i += batchSize) {
+    batches.push({
+      texts: uncachedTexts.slice(i, i + batchSize),
+      startIndex: i
+    });
+  }
+  
+  console.log(`[ULTRA-FAST TRANSLATION] Created ${batches.length} batches for ${uncachedTexts.length} uncached texts`);
+  
+  const startTime = Date.now();
+  const results = new Array(totalTexts);
+  
+  // Copy cached results
+  cachedResults.forEach((result, index) => {
+    if (result !== undefined) {
+      results[index] = result;
+    }
+  });
+  
+  // Process uncached batches with ultra-high concurrency
+  const semaphore = {
+    count: maxConcurrency,
+    waiters: []
+  };
+  
+  const acquire = () => {
+    return new Promise((resolve) => {
+      if (semaphore.count > 0) {
+        semaphore.count--;
+        resolve();
+      } else {
+        semaphore.waiters.push(resolve);
+      }
+    });
+  };
+  
+  const release = () => {
+    semaphore.count++;
+    if (semaphore.waiters.length > 0) {
+      const waiter = semaphore.waiters.shift();
+      semaphore.count--;
+      waiter();
+    }
+  };
+  
+  const batchPromises = batches.map(async (batch, batchIndex) => {
+    await acquire();
+    
+    try {
+      console.log(`[ULTRA-FAST TRANSLATION] Processing batch ${batchIndex + 1}/${batches.length} (${batch.texts.length} items)`);
+      const batchStartTime = Date.now();
+      
+      const translatedBatch = await translateBatch(batch.texts, targetLanguage, sourceLanguage);
+      
+      // Cache the results and map them back to original indices
+      batch.texts.forEach((originalText, localIndex) => {
+        const translatedText = translatedBatch[localIndex] || originalText;
+        const originalIndex = uncachedIndices[batch.startIndex + localIndex];
+        
+        // Cache the translation
+        const cacheKey = getCacheKey(originalText, targetLanguage, sourceLanguage);
+        translationCache.set(cacheKey, translatedText);
+        
+        // Store in results array
+        results[originalIndex] = translatedText;
+      });
+      
+      const batchEndTime = Date.now();
+      console.log(`[ULTRA-FAST TRANSLATION] Batch ${batchIndex + 1} completed in ${batchEndTime - batchStartTime}ms`);
+      
+    } catch (error) {
+      console.error(`[ULTRA-FAST TRANSLATION] Batch ${batchIndex + 1} failed:`, error.message);
+      
+      // Fallback: use original texts
+      batch.texts.forEach((originalText, localIndex) => {
+        const originalIndex = uncachedIndices[batch.startIndex + localIndex];
+        results[originalIndex] = originalText;
+      });
+    } finally {
+      release();
+    }
+  });
+  
+  await Promise.all(batchPromises);
+  
+  const endTime = Date.now();
+  const totalDuration = endTime - startTime;
+  
+  console.log(`[ULTRA-FAST TRANSLATION] Ultra-fast processing completed in ${totalDuration}ms (${(totalDuration/1000).toFixed(2)} seconds)`);
+  console.log(`[ULTRA-FAST TRANSLATION] Successfully processed ${totalTexts} items with ${cacheHitRate}% cache efficiency`);
+  console.log(`[ULTRA-FAST TRANSLATION] Cache size: ${translationCache.size} entries`);
+  
+  return results;
+};
+
 // Translate audio text endpoint
 router.all('/translateAudioText', async (req, res) => {
   // Handle OPTIONS requests for CORS preflight
@@ -1106,100 +1333,171 @@ router.all('/translateAudioText', async (req, res) => {
 
     console.log(`Translating from ${audioData.language} to ${language}...`);
     
-    // Translate words in batches for better performance
+    // Translate words using optimized parallel processing
     const originalWords = audioData.words_data;
     const translatedWords = [];
     
-    console.log(`[TRANSLATION] Starting translation process for UID: ${uid}, AudioID: ${audioid}`);
+    console.log(`[TRANSLATION] Starting optimized translation process for UID: ${uid}, AudioID: ${audioid}`);
     console.log(`[TRANSLATION] Total words to translate: ${originalWords.length}`);
     console.log(`[TRANSLATION] Target language: ${language}, Source language: ${audioData.language || 'en'}`);
     
-    // Prepare batches of words to translate (maximum 25 items per batch to avoid API limits)
-    const BATCH_SIZE = 25;
     const sourceLanguage = audioData.language || 'en';
-    
     const startTime = Date.now();
     
     try {
-      // Extract all words and punctuated words that need translation
-      const wordsToTranslate = [];
-      const punctuatedWordsToTranslate = [];
+      // Check if we need streaming processing for very large datasets
+      const isVeryLargeDataset = originalWords.length > 50000;
       
-      originalWords.forEach(wordObj => {
-        wordsToTranslate.push(wordObj.word);
-        punctuatedWordsToTranslate.push(wordObj.punctuated_word || wordObj.word);
-      });
-      
-      console.log(`[TRANSLATION] Prepared ${wordsToTranslate.length} regular words and ${punctuatedWordsToTranslate.length} punctuated words for translation`);
-      
-      // Process words in batches
-      const translatedWordsBatches = [];
-      const translatedPunctuatedWordsBatches = [];
-      
-      // Process regular words
-      console.log(`[TRANSLATION] Starting batch translation of regular words with batch size ${BATCH_SIZE}`);
-      for (let i = 0; i < wordsToTranslate.length; i += BATCH_SIZE) {
-        const batchStartTime = Date.now();
-        const batch = wordsToTranslate.slice(i, i + BATCH_SIZE);
-        console.log(`[TRANSLATION] Processing batch ${Math.floor(i/BATCH_SIZE) + 1}/${Math.ceil(wordsToTranslate.length/BATCH_SIZE)} (${batch.length} words)`);
+      if (isVeryLargeDataset) {
+        console.log(`[TRANSLATION] Very large dataset detected (${originalWords.length} words). Using streaming processing...`);
         
-        const translatedBatch = await translateBatch(batch, language, sourceLanguage);
-        translatedWordsBatches.push(...translatedBatch);
+        // Streaming processing for very large datasets
+        const STREAM_CHUNK_SIZE = 10000; // Process 10k words at a time
+        const chunks = [];
         
-        const batchEndTime = Date.now();
-        console.log(`[TRANSLATION] Batch ${Math.floor(i/BATCH_SIZE) + 1} completed in ${batchEndTime - batchStartTime}ms`);
-        
-        // Small delay between batches to avoid rate limiting
-        if (i + BATCH_SIZE < wordsToTranslate.length) {
-          console.log(`[TRANSLATION] Adding delay between batches (200ms)`);
-          await new Promise(resolve => setTimeout(resolve, 200));
+        for (let i = 0; i < originalWords.length; i += STREAM_CHUNK_SIZE) {
+          chunks.push(originalWords.slice(i, i + STREAM_CHUNK_SIZE));
         }
-      }
-      
-      // Process punctuated words
-      console.log(`[TRANSLATION] Starting batch translation of punctuated words with batch size ${BATCH_SIZE}`);
-      for (let i = 0; i < punctuatedWordsToTranslate.length; i += BATCH_SIZE) {
-        const batchStartTime = Date.now();
-        const batch = punctuatedWordsToTranslate.slice(i, i + BATCH_SIZE);
-        console.log(`[TRANSLATION] Processing batch ${Math.floor(i/BATCH_SIZE) + 1}/${Math.ceil(punctuatedWordsToTranslate.length/BATCH_SIZE)} (${batch.length} punctuated words)`);
         
-        const translatedBatch = await translateBatch(batch, language, sourceLanguage);
-        translatedPunctuatedWordsBatches.push(...translatedBatch);
+        console.log(`[TRANSLATION] Split into ${chunks.length} streaming chunks of ${STREAM_CHUNK_SIZE} words each`);
         
-        const batchEndTime = Date.now();
-        console.log(`[TRANSLATION] Batch ${Math.floor(i/BATCH_SIZE) + 1} completed in ${batchEndTime - batchStartTime}ms`);
-        
-        // Small delay between batches to avoid rate limiting
-        if (i + BATCH_SIZE < punctuatedWordsToTranslate.length) {
-          console.log(`[TRANSLATION] Adding delay between batches (200ms)`);
-          await new Promise(resolve => setTimeout(resolve, 200));
+        // Process chunks sequentially to manage memory
+        for (let chunkIndex = 0; chunkIndex < chunks.length; chunkIndex++) {
+          const chunk = chunks[chunkIndex];
+          const chunkStartTime = Date.now();
+          
+          console.log(`[TRANSLATION] Processing streaming chunk ${chunkIndex + 1}/${chunks.length} (${chunk.length} words)`);
+          
+          // Process this chunk with the same optimization logic
+          const uniqueTextsMap = new Map();
+          
+          chunk.forEach((wordObj) => {
+            const word = wordObj.word;
+            const punctuatedWord = wordObj.punctuated_word || wordObj.word;
+            
+            uniqueTextsMap.set(word, word);
+            if (punctuatedWord !== word) {
+              uniqueTextsMap.set(punctuatedWord, punctuatedWord);
+            }
+          });
+          
+          const uniqueTexts = Array.from(uniqueTextsMap.keys());
+          console.log(`[TRANSLATION] Chunk ${chunkIndex + 1}: ${chunk.length} words → ${uniqueTexts.length} unique texts`);
+          
+          // Translate this chunk
+          const translatedTexts = await translateBatchesUltraFast(uniqueTexts, language, sourceLanguage);
+          
+          // Create translation map for this chunk
+          const translationMap = new Map();
+          uniqueTexts.forEach((text, index) => {
+            translationMap.set(text, translatedTexts[index] || text);
+          });
+          
+          // Build translated words for this chunk
+          chunk.forEach((wordObj) => {
+            const word = wordObj.word;
+            const punctuatedWord = wordObj.punctuated_word || wordObj.word;
+            
+            const translatedWord = translationMap.get(word) || word;
+            const translatedPunctuatedWord = translationMap.get(punctuatedWord) || translatedWord;
+            
+            translatedWords.push({
+              end: wordObj.end,
+              word: translatedWord,
+              start: wordObj.start,
+              confidence: wordObj.confidence,
+              punctuated_word: translatedPunctuatedWord,
+              original_word: wordObj.word,
+              original_punctuated_word: wordObj.punctuated_word || wordObj.word
+            });
+          });
+          
+          const chunkEndTime = Date.now();
+          console.log(`[TRANSLATION] Chunk ${chunkIndex + 1} completed in ${chunkEndTime - chunkStartTime}ms`);
+          
+          // Force garbage collection hint for very large datasets
+          if (global.gc && chunkIndex % 5 === 0) {
+            global.gc();
+          }
         }
-      }
-      
-      console.log(`[TRANSLATION] All batches processed. Combining results...`);
-      
-      // Combine the results with the original structure
-      originalWords.forEach((wordObj, index) => {
-        translatedWords.push({
-          end: wordObj.end,
-          word: translatedWordsBatches[index] || wordObj.word,
-          start: wordObj.start,
-          confidence: wordObj.confidence,
-          punctuated_word: translatedPunctuatedWordsBatches[index] || wordObj.punctuated_word || wordObj.word,
-          original_word: wordObj.word,
-          original_punctuated_word: wordObj.punctuated_word || wordObj.word
+        
+      } else {
+        // Standard processing for smaller datasets
+        console.log(`[TRANSLATION] Standard processing for ${originalWords.length} words`);
+        
+        // Create a unique set of texts to translate (eliminates duplicates)
+        const uniqueTextsMap = new Map();
+        const wordIndexMap = new Map();
+        const punctuatedWordIndexMap = new Map();
+        
+        originalWords.forEach((wordObj, index) => {
+          const word = wordObj.word;
+          const punctuatedWord = wordObj.punctuated_word || wordObj.word;
+          
+          // Track unique words and their indices
+          if (!uniqueTextsMap.has(word)) {
+            uniqueTextsMap.set(word, word);
+            wordIndexMap.set(word, []);
+          }
+          wordIndexMap.get(word).push(index);
+          
+          // Track unique punctuated words and their indices (only if different from word)
+          if (punctuatedWord !== word && !uniqueTextsMap.has(punctuatedWord)) {
+            uniqueTextsMap.set(punctuatedWord, punctuatedWord);
+            punctuatedWordIndexMap.set(punctuatedWord, []);
+          }
+          if (punctuatedWord !== word) {
+            if (!punctuatedWordIndexMap.has(punctuatedWord)) {
+              punctuatedWordIndexMap.set(punctuatedWord, []);
+            }
+            punctuatedWordIndexMap.get(punctuatedWord).push(index);
+          }
         });
-      });
+        
+        const uniqueTexts = Array.from(uniqueTextsMap.keys());
+        console.log(`[TRANSLATION] Optimized: ${originalWords.length} total words reduced to ${uniqueTexts.length} unique texts`);
+        console.log(`[TRANSLATION] Deduplication saved ${((originalWords.length * 2 - uniqueTexts.length) / (originalWords.length * 2) * 100).toFixed(1)}% of translation requests`);
+        
+        // Translate all unique texts using ultra-fast processing
+        const translatedTexts = await translateBatchesUltraFast(uniqueTexts, language, sourceLanguage);
+        
+        // Create translation map
+        const translationMap = new Map();
+        uniqueTexts.forEach((text, index) => {
+          translationMap.set(text, translatedTexts[index] || text);
+        });
+        
+        console.log(`[TRANSLATION] Building final word structure...`);
+        
+        // Build the final translated words array
+        originalWords.forEach((wordObj, index) => {
+          const word = wordObj.word;
+          const punctuatedWord = wordObj.punctuated_word || wordObj.word;
+          
+          const translatedWord = translationMap.get(word) || word;
+          const translatedPunctuatedWord = translationMap.get(punctuatedWord) || translatedWord;
+          
+          translatedWords.push({
+            end: wordObj.end,
+            word: translatedWord,
+            start: wordObj.start,
+            confidence: wordObj.confidence,
+            punctuated_word: translatedPunctuatedWord,
+            original_word: wordObj.word,
+            original_punctuated_word: wordObj.punctuated_word || wordObj.word
+          });
+        });
+      }
       
       const endTime = Date.now();
       const totalDuration = endTime - startTime;
-      console.log(`[TRANSLATION] Translation process completed in ${totalDuration}ms (${(totalDuration/1000).toFixed(2)} seconds)`);
-      console.log(`[TRANSLATION] Successfully translated ${translatedWords.length} words`);
+      console.log(`[TRANSLATION] Optimized translation process completed in ${totalDuration}ms (${(totalDuration/1000).toFixed(2)} seconds)`);
+      console.log(`[TRANSLATION] Successfully translated ${translatedWords.length} words using ${uniqueTexts.length} API calls`);
       
     } catch (error) {
-      console.error('[TRANSLATION] Error in batch translation:', error);
+      console.error('[TRANSLATION] Error in optimized translation:', error);
       
-      // Fallback to original words if batch translation fails
+      // Fallback to original words if translation fails
       console.log('[TRANSLATION] Falling back to original words due to error');
       originalWords.forEach(wordObj => {
         translatedWords.push({
@@ -1217,18 +1515,26 @@ router.all('/translateAudioText', async (req, res) => {
       console.log(`[TRANSLATION] Process failed after ${endTime - startTime}ms`);
     }
 
-    // Translate the full transcription
+    // Translate the full transcription in parallel with word processing using intelligent chunking
     let translatedTranscription = '';
-    try {
-      translatedTranscription = await translateText(
-        audioData.transcription, 
-        language, 
-        audioData.language || 'en'
-      );
-    } catch (error) {
-      console.error('Error translating transcription:', error);
-      translatedTranscription = audioData.transcription; // Fallback to original
-    }
+    const transcriptionPromise = (async () => {
+      try {
+        console.log('[TRANSCRIPTION] Starting parallel transcription translation...');
+        const result = await translateLargeTranscription(
+          audioData.transcription, 
+          language, 
+          audioData.language || 'en'
+        );
+        console.log('[TRANSCRIPTION] Transcription translation completed');
+        return result;
+      } catch (error) {
+        console.error('Error translating transcription:', error);
+        return audioData.transcription; // Fallback to original
+      }
+    })();
+    
+    // Wait for transcription translation to complete
+    translatedTranscription = await transcriptionPromise;
 
     // Prepare the translated data structure
     const newTranslatedData = {
@@ -1248,23 +1554,56 @@ router.all('/translateAudioText', async (req, res) => {
       target_language: language
     };
 
-    // Update the translated_data in the database
+    // Update the translated_data in the database with optimized retry logic
     const updatedTranslatedData = {
       ...existingTranslatedData,
       [language]: newTranslatedData
     };
 
-    const { error: updateError } = await supabase
-      .from('audio_metadata')
-      .update({ translated_data: updatedTranslatedData })
-      .eq('uid', uid)
-      .eq('audioid', audioid);
+    console.log(`[DATABASE UPDATE] Attempting to save ${translatedWords.length} translated words for language: ${language}`);
+    
+    // Optimized database update with retry logic for large datasets
+    const updateWithRetry = async (retries = 3) => {
+      for (let attempt = 1; attempt <= retries; attempt++) {
+        try {
+          console.log(`[DATABASE UPDATE] Attempt ${attempt}/${retries} - Updating translated data...`);
+          
+          const { error: updateError } = await supabase
+            .from('audio_metadata')
+            .update({ translated_data: updatedTranslatedData })
+            .eq('uid', uid)
+            .eq('audioid', audioid);
 
-    if (updateError) {
-      console.error('Error updating translated data:', updateError);
+          if (updateError) {
+            if (updateError.code === '57014' && attempt < retries) {
+              // Statement timeout - retry with exponential backoff
+              const delay = Math.pow(2, attempt) * 1000; // 2s, 4s, 8s
+              console.log(`[DATABASE UPDATE] Timeout on attempt ${attempt}, retrying in ${delay}ms...`);
+              await new Promise(resolve => setTimeout(resolve, delay));
+              continue;
+            }
+            throw updateError;
+          }
+          
+          console.log(`[DATABASE UPDATE] Successfully saved translated data on attempt ${attempt}`);
+          return { success: true };
+          
+        } catch (error) {
+          console.error(`[DATABASE UPDATE] Attempt ${attempt} failed:`, error);
+          if (attempt === retries) {
+            throw error;
+          }
+        }
+      }
+    };
+
+    try {
+      await updateWithRetry(3);
+    } catch (updateError) {
+      console.error('Error updating translated data after all retries:', updateError);
       return res.status(500).json({ 
         success: false,
-        message: 'Error saving translated data' 
+        message: 'Error saving translated data - database timeout. Please try again.' 
       });
     }
 

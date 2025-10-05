@@ -4,11 +4,28 @@ const { Readable } = require('stream');
 
 // HTTP handler for Alibaba Cloud Function Compute
 const handler = (req, resp, context) => {
-  console.log('HTTP Handler called');
-  console.log('Request method:', req.method);
-  console.log('Request path:', req.path);
-  console.log('Request headers:', JSON.stringify(req.headers, null, 2));
-  console.log('Request body type:', typeof req.body);
+  const startTime = Date.now();
+  const requestId = context.requestId || `req-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+  
+  console.log(`[${requestId}] HTTP Handler called`);
+  console.log(`[${requestId}] Request method:`, req.method);
+  console.log(`[${requestId}] Request path:`, req.path);
+  console.log(`[${requestId}] Request headers:`, JSON.stringify(req.headers, null, 2));
+  console.log(`[${requestId}] Request body type:`, typeof req.body);
+  
+  // Set up timeout protection
+  const timeoutId = setTimeout(() => {
+    console.error(`[${requestId}] Request timeout after 580 seconds`);
+    if (!resp.headersSent) {
+      resp.setStatusCode(504);
+      resp.setHeader('Content-Type', 'application/json');
+      resp.send(JSON.stringify({
+        error: 'Gateway Timeout',
+        message: 'Request processing exceeded time limit',
+        requestId: requestId
+      }));
+    }
+  }, 580000); // 580 seconds (20 seconds before function timeout)
   
   try {
     // Parse JSON body if present - handle Buffer objects
@@ -257,6 +274,11 @@ const handler = (req, resp, context) => {
         // CORS headers are handled by the serverless configuration in s.yaml
         // No need to set them manually here to prevent duplicates
         
+        // Clear timeout and log completion
+        clearTimeout(timeoutId);
+        const duration = Date.now() - startTime;
+        console.log(`[${requestId}] Request completed in ${duration}ms`);
+        
         resp.send(this.body || '');
         return this;
       }
@@ -269,18 +291,31 @@ const handler = (req, resp, context) => {
     app(expressReq, expressRes);
     
   } catch (error) {
-    console.error('Error in handler:', error);
-    console.error('Error stack:', error.stack);
+    // Clear timeout on error
+    clearTimeout(timeoutId);
+    const duration = Date.now() - startTime;
+    
+    console.error(`[${requestId}] Error in handler after ${duration}ms:`, error);
+    console.error(`[${requestId}] Error stack:`, error.stack);
+    console.error(`[${requestId}] Request details:`, {
+      method: req.method,
+      path: req.path,
+      headers: req.headers,
+      bodyType: typeof req.body
+    });
     
     // Set error response
-    resp.setStatusCode(500);
-    resp.setHeader('Content-Type', 'application/json');
-    resp.send(JSON.stringify({
-      error: 'Internal server error',
-      message: error.message,
-      service: 'MatrixAI Server',
-      platform: 'Alibaba Cloud Function Compute'
-    }));
+    if (!resp.headersSent) {
+      resp.setStatusCode(500);
+      resp.setHeader('Content-Type', 'application/json');
+      resp.send(JSON.stringify({
+        error: 'Internal server error',
+        message: error.message,
+        requestId: requestId,
+        service: 'MatrixAI Server',
+        platform: 'Alibaba Cloud Function Compute'
+      }));
+    }
   }
 };
 

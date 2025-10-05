@@ -1,15 +1,19 @@
 const express = require('express');
 const { getSupabaseClient } = require('../config/database.js');
 const { v4: uuidv4 } = require('uuid');
+const { createTimezoneAwareTimestamp } = require('../utils/timezone.js');
 
 const router = express.Router();
 
 // Helper function to deduct coins
-const deductCoins = async (uid, coinAmount, transactionName) => {
+const deductCoins = async (uid, coinAmount, transactionName, req = null) => {
   console.log(`Deducting ${coinAmount} coins for user ${uid} for ${transactionName}`);
   try {
     const supabase = getSupabaseClient();
     console.log('Supabase client initialized');
+    
+    // Get timezone-aware timestamp
+    const timestampInfo = req ? createTimezoneAwareTimestamp(req) : { timestamp: new Date().toISOString(), timezone: 'UTC' };
 
     // Step 1: Fetch user details
     console.log(`Fetching user details for uid: ${uid}`);
@@ -49,7 +53,8 @@ const deductCoins = async (uid, coinAmount, transactionName) => {
             coin_amount: coinAmount,
             remaining_coins: user_coins,
             status: 'failed',
-            time: new Date().toISOString()
+            time: timestampInfo.timestamp,
+            timezone: timestampInfo.timezone
           }]);
           
         if (failedTransactionError) {
@@ -97,7 +102,8 @@ const deductCoins = async (uid, coinAmount, transactionName) => {
           coin_amount: coinAmount,
           remaining_coins: updatedCoins,
           status: 'success',
-          time: new Date().toISOString()
+          time: timestampInfo.timestamp,
+          timezone: timestampInfo.timezone
         }]);
         
       if (transactionError) {
@@ -125,7 +131,7 @@ const deductCoins = async (uid, coinAmount, transactionName) => {
 };
 
 // Helper function to poll for image generation status
-const pollImageGeneration = async (taskId, imageId, uid, maxAttempts = 30, delayMs = 2000) => {
+const pollImageGeneration = async (taskId, imageId, uid, maxAttempts = 50, delayMs = 2000) => {
   console.log(`Starting to poll for task ${taskId}, image ${imageId}`);
   let attempts = 0;
   
@@ -232,12 +238,12 @@ router.all('/createImage', async (req, res) => {
     }
 
     const requestedCount = Math.min(Math.max(parseInt(imageCount) || 4, 1), 10);
-    const coinCost = requestedCount * 3;
+    const coinCost = requestedCount * 5;
 
     console.log(`Creating ${requestedCount} images for user ${uid}`);
 
     // Deduct coins
-    const coinResult = await deductCoins(uid, coinCost, 'image_generation');
+    const coinResult = await deductCoins(uid, coinCost, 'image_generation', req);
     if (!coinResult.success) {
       return res.status(400).json({ message: coinResult.message });
     }
@@ -247,13 +253,17 @@ router.all('/createImage', async (req, res) => {
 
     // Save initial metadata
     console.log('Attempting to save initial metadata to Supabase...');
+    // Get timezone-aware timestamp for image creation
+    const imageTimestampInfo = createTimezoneAwareTimestamp(req);
+    
     // Based on the getGeneratedImage response and error messages, we need to include image_path and image_url
     const insertData = {
       uid,
       image_id: imageId,
       image_name: `generated_image_${imageId}`,
       prompt_text: `${promptText} (${requestedCount} images)`,
-      created_at: new Date().toISOString(),
+      created_at: imageTimestampInfo.timestamp,
+      timezone: imageTimestampInfo.timezone,
       // Add placeholders for required fields that will be updated later
       image_path: `users/${uid}/images/${uid}_${imageId}.png`,
       // Add a placeholder for image_url
@@ -789,12 +799,12 @@ router.all('/createImageFromUrl', async (req, res) => {
     }
 
     // Fixed coin cost for image enhancement
-    const coinCost = 10;
+    const coinCost = 15;
 
     console.log(`Creating enhanced image for user ${uid} from ${imageUrls.length} image URLs:`, imageUrls);
 
     // Deduct coins
-    const coinResult = await deductCoins(uid, coinCost, 'image_enhancement');
+    const coinResult = await deductCoins(uid, coinCost, 'image_enhancement', req);
     if (!coinResult.success) {
       return res.status(400).json({ message: coinResult.message });
     }
@@ -804,12 +814,16 @@ router.all('/createImageFromUrl', async (req, res) => {
 
     // Save initial metadata
     console.log('Attempting to save initial metadata to Supabase...');
+    // Get timezone-aware timestamp for image enhancement
+    const enhancementTimestampInfo = createTimezoneAwareTimestamp(req);
+    
     const insertData = {
       uid,
       image_id: imageId,
       image_name: `enhanced_image_${imageId}`,
       prompt_text: promptText,
-      created_at: new Date().toISOString(),
+      created_at: enhancementTimestampInfo.timestamp,
+      timezone: enhancementTimestampInfo.timezone,
       // Add placeholders for required fields that will be updated later
       image_path: `users/${uid}/images/${uid}_${imageId}.png`,
       // Add a placeholder for image_url

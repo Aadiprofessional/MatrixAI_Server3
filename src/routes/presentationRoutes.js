@@ -8,16 +8,25 @@ const fs = require("fs");
 const path = require("path");
 const xml2js = require("xml2js");
 const { JSDOM } = require("jsdom");
+const { createTimezoneAwareTimestamp } = require('../utils/timezone');
 // d3 removed - not used in this file
 
 const router = express.Router();
 
 // Helper function to deduct coins
-const deductCoins = async (uid, coinAmount, transactionName) => {
+const deductCoins = async (uid, coinAmount, transactionName, req = null) => {
   console.log(`Deducting ${coinAmount} coins for user ${uid} for ${transactionName}`);
   try {
     const supabase = getSupabaseClient();
     console.log('Supabase client initialized');
+
+    // Get timezone-aware timestamp for transaction logging
+    const timestampInfo = req ? createTimezoneAwareTimestamp(req) : {
+      timestamp: new Date().toISOString(),
+      timezone: 'UTC',
+      localTime: new Date().toISOString(),
+      utcTime: new Date().toISOString()
+    };
 
     // Step 1: Fetch user details
     console.log(`Fetching user details for uid: ${uid}`);
@@ -48,7 +57,8 @@ const deductCoins = async (uid, coinAmount, transactionName) => {
             coin_amount: coinAmount,
             remaining_coins: user_coins,
             status: 'failed',
-            time: new Date().toISOString()
+            time: timestampInfo.timestamp,
+            timezone: timestampInfo.timezone
           }]);
           
         if (failedTransactionError) {
@@ -84,7 +94,8 @@ const deductCoins = async (uid, coinAmount, transactionName) => {
         coin_amount: coinAmount,
         remaining_coins: newCoinBalance,
         status: 'success',
-        time: new Date().toISOString()
+        time: timestampInfo.timestamp,
+        timezone: timestampInfo.timezone
       }]);
 
     if (transactionError) {
@@ -989,7 +1000,7 @@ router.all('/createPresentation', async (req, res) => {
     const coinCost = numPages * 10;
     
     // Deduct coins first
-    const coinResult = await deductCoins(uid, coinCost, 'Presentation Creation');
+    const coinResult = await deductCoins(uid, coinCost, 'Presentation Creation', req);
     if (!coinResult.success) {
       return res.status(400).json({
         success: false,
