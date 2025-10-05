@@ -688,6 +688,13 @@ const deductCoins = async (uid, coinAmount, transactionName, req = null) => {
     if (userError) {
       console.error('[DEDUCT_COINS] Error fetching user:', userError);
       console.error('[DEDUCT_COINS] Error details:', JSON.stringify(userError, null, 2));
+      
+      // Handle user not found error specifically
+      if (userError.code === 'PGRST116') {
+        console.log('[DEDUCT_COINS] User not found, cannot deduct coins');
+        return { success: false, message: 'User not found' };
+      }
+      
       return { success: false, message: 'Failed to fetch user information' };
     }
 

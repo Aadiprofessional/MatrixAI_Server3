@@ -109,7 +109,12 @@ const deductCoins = async (uid, coinAmount, transactionName, req = null) => {
       utcTime: new Date().toISOString()
     };
     
-    const response = await axios.post('https://main-matrixai-server-lujmidrakh.cn-hangzhou.fcapp.run/api/user/subtractCoins', {
+    // Use local API for development, production API for production
+    const apiUrl = process.env.NODE_ENV === 'production' 
+      ? 'https://main-matrixai-server-lujmidrakh.cn-hangzhou.fcapp.run/api/user/subtractCoins'
+      : 'http://localhost:3002/api/user/subtractCoins';
+    
+    const response = await axios.post(apiUrl, {
       uid,
       coinAmount,
       transaction_name: transactionName,
@@ -1526,6 +1531,672 @@ router.post('/generateSubtitles', async (req, res) => {
       message: 'Internal server error during video subtitle generation'
     });
   }
+});
+
+// Helper function to poll for Doubao video generation status
+const pollDoubaoVideoStatus = async (taskId, maxAttempts = 60, interval = 10000, initialDelay = 30000) => {
+  console.log(`Starting polling for Doubao task ID: ${taskId}`);
+  console.log(`Initial delay: ${initialDelay}ms, then polling every ${interval}ms for up to ${maxAttempts} attempts`);
+  
+  // Initial delay before starting to poll
+  await new Promise(resolve => setTimeout(resolve, initialDelay));
+  
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      console.log(`Polling attempt ${attempt}/${maxAttempts} for Doubao task ID: ${taskId}`);
+      
+      const response = await fetch(`https://ark.cn-beijing.volces.com/api/v3/contents/generations/tasks/${taskId}`, {
+        method: 'GET',
+        headers: {
+          'Authorization': 'Bearer 38aeff96-6ca0-4179-8c6b-92cd84fb4d6e',
+          'Content-Type': 'application/json'
+        }
+      });
+      
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error(`Error polling Doubao video status (Attempt ${attempt}):`, response.status, response.statusText, errorText);
+        await new Promise(resolve => setTimeout(resolve, interval));
+        continue;
+      }
+      
+      const result = await response.json();
+      console.log(`Poll result for Doubao task ID ${taskId}:`, JSON.stringify(result));
+      
+      // Check if the task is completed (Doubao uses 'succeeded' status)
+      if (result.status === 'succeeded' && result.content && result.content.video_url) {
+        console.log(`Doubao video generation completed for task ID: ${taskId}`);
+        
+        // Clean the URL (remove backticks, quotes, and whitespace)
+        let cleanVideoUrl = result.content.video_url.replace(/[\s`"']/g, '').trim();
+        console.log(`Cleaned video URL: "${cleanVideoUrl}"`);
+        
+        return {
+          success: true,
+          videoUrl: cleanVideoUrl,
+          taskStatus: result.status,
+          taskId: taskId,
+          requestId: result.id,
+          submitTime: result.created_at,
+          scheduledTime: result.created_at,
+          endTime: result.updated_at,
+          content: result.content
+        };
+      }
+      
+      // Check if the task failed
+      if (result.status === 'failed') {
+        console.error(`Doubao video generation failed for task ID: ${taskId}`, result.error);
+        return {
+          success: false,
+          taskStatus: 'failed',
+          errorMessage: result.error?.message || 'Video generation failed'
+        };
+      }
+      
+      // Wait before the next polling attempt
+      await new Promise(resolve => setTimeout(resolve, interval));
+    } catch (error) {
+      console.error(`Exception during Doubao polling (Attempt ${attempt}):`, error);
+      await new Promise(resolve => setTimeout(resolve, interval));
+    }
+  }
+  
+  console.log(`Doubao polling timed out after ${maxAttempts} attempts for task ID: ${taskId}`);
+  return {
+    success: false,
+    taskStatus: 'timeout',
+    errorMessage: 'Polling timed out. The video may still be processing.'
+  };
+};
+
+// Create Video Ultra using Doubao API
+router.post('/createVideoUltra', async (req, res) => {
+  try {
+    const { uid, promptText, imageUrl } = req.body;
+
+    // Validate required parameters
+    if (!uid) {
+      return res.status(400).json({ error: 'User ID is required' });
+    }
+
+    if (!promptText) {
+      return res.status(400).json({ error: 'Prompt text is required' });
+    }
+
+    if (!imageUrl) {
+      return res.status(400).json({ error: 'Image URL is required' });
+    }
+
+    // Check if user has enough coins (5 coins for video generation)
+    const coinCost = 5;
+    const deductionResult = await deductCoins(uid, coinCost, 'Video Generation Ultra', req);
+    if (!deductionResult.success) {
+      return res.status(400).json({ error: deductionResult.message });
+    }
+
+    // Generate unique video ID
+    const videoId = uuidv4();
+    
+    // Fixed parameters for Ultra API - 720p resolution and 5 seconds duration
+    const width = 1280;
+    const height = 720;
+    const duration = 5;
+    
+    // Prepare request body for Doubao API (matching working createVideo format)
+    const requestBody = {
+      model: "doubao-seedance-1-0-pro-250528",
+      content: [
+        {
+          type: "text",
+          text: `${promptText} --resolution 1080p --duration ${duration} --camerafixed false --watermark true`
+        },
+        {
+          type: "image_url",
+          image_url: {
+            url: imageUrl
+          }
+        }
+      ]
+    };
+
+    console.log('Calling Doubao API with request body:', JSON.stringify(requestBody, null, 2));
+
+    // Call Doubao API (using correct endpoint for content generation)
+    const response = await axios.post('https://ark.cn-beijing.volces.com/api/v3/contents/generations/tasks', requestBody, {
+      headers: {
+        'Authorization': `Bearer ${process.env.DOUBAO_API_KEY}`,
+        'Content-Type': 'application/json'
+      }
+    });
+
+    console.log('Doubao API response:', response.data);
+
+    if (response.data && response.data.id) {
+      const taskId = response.data.id;
+      
+      // Store initial video metadata in Supabase
+      const supabase = getSupabaseClient();
+      
+      // Get timezone-aware timestamp for video creation
+      const videoTimestampInfo = createTimezoneAwareTimestamp(req);
+      
+      const { data: insertData, error: insertError } = await supabase
+        .from('video_metadata')
+        .insert({
+          uid,
+          prompt_text: promptText,
+          image_url: imageUrl,
+          status: 'processing',
+          task_id: taskId,
+          created_at: videoTimestampInfo.timestamp,
+          updated_at: videoTimestampInfo.timestamp,
+          timezone: videoTimestampInfo.timezone,
+          video_id: videoId
+        });
+
+      if (insertError) {
+        console.error('Error inserting video metadata:', insertError);
+        return res.status(500).json({ error: 'Failed to store video metadata', details: insertError.message });
+      }
+
+      console.log('Video metadata stored successfully:', insertData);
+
+      // Wait for video generation to complete using synchronous polling (like createVideo)
+      console.log('Starting synchronous polling for task:', taskId);
+      const pollResult = await pollDoubaoVideoStatus(taskId, 60, 10000, 30000);
+      console.log('Polling completed for task:', taskId, 'Result:', pollResult);
+      
+      try {
+        if (pollResult.success && pollResult.videoUrl) {
+          // Video generation successful, download and upload to Supabase storage
+          console.log('Video generation successful, downloading from:', pollResult.videoUrl);
+          
+          let uploadSuccess = false;
+          let urlData = null;
+          
+          try {
+            // Download the video with retry logic (matching createVideo pattern)
+            let videoResponse;
+            let retryCount = 0;
+            const maxRetries = 3;
+            
+            while (retryCount < maxRetries) {
+              try {
+                console.log(`Attempting to download video (attempt ${retryCount + 1}/${maxRetries})`);
+                videoResponse = await axios.get(pollResult.videoUrl, {
+                  responseType: 'arraybuffer',
+                  timeout: 300000 // 5 minutes timeout
+                });
+                console.log('Video downloaded successfully, size:', videoResponse.data.length);
+                break;
+              } catch (downloadError) {
+                retryCount++;
+                console.error(`Download attempt ${retryCount} failed:`, downloadError.message);
+                if (retryCount >= maxRetries) {
+                  throw downloadError;
+                }
+                // Wait before retry
+                await new Promise(resolve => setTimeout(resolve, 5000));
+              }
+            }
+            
+            // Upload to Supabase storage
+            const fileName = `video_${Date.now()}_${Math.random().toString(36).substr(2, 9)}.mp4`;
+            const filePath = `users/${uid}/videos/${fileName}`;
+            
+            console.log('Uploading video to Supabase storage...');
+            const { data, error } = await supabase.storage
+              .from('user-uploads')
+              .upload(filePath, videoResponse.data, {
+                contentType: 'video/mp4',
+                upsert: false
+              });
+            
+            if (error) {
+              console.error('Error uploading video to Supabase storage:', error);
+              throw new Error(`Upload failed: ${error.message}`);
+            } else {
+              console.log('Video uploaded to Supabase storage successfully:', data);
+              
+              // Get public URL
+              const { data: urlData_temp } = supabase.storage
+                .from('user-uploads')
+                .getPublicUrl(filePath);
+              
+              console.log('Generated public URL for upload:', urlData_temp?.publicUrl);
+              
+              // Assign to the higher scope variable
+              urlData = urlData_temp;
+              uploadSuccess = true;
+              
+              // Update database with the Supabase storage URL
+              const { error: updateError } = await supabase
+                .from('video_metadata')
+                .update({
+                  video_url: urlData.publicUrl, // Only save the public URL
+                  status: 'completed',
+                  task_status: pollResult.taskStatus,
+                  request_id: pollResult.requestId,
+                  submit_time: pollResult.submitTime,
+                  scheduled_time: pollResult.scheduledTime,
+                  end_time: pollResult.endTime,
+                  updated_at: new Date().toISOString()
+                })
+                .eq('video_id', videoId);
+              
+              if (updateError) {
+                console.error('Error updating database with upload URL:', updateError);
+              } else {
+                console.log('Successfully updated database with upload URL');
+              }
+            }
+          } catch (uploadException) {
+            console.error('Unexpected exception during upload process:', uploadException);
+            
+            // Mark as failed instead of using Doubao URL
+            try {
+              console.log('Marking video as failed due to upload exception');
+              await supabase
+                .from('video_metadata')
+                .update({
+                  status: 'failed',
+                  task_status: pollResult.taskStatus,
+                  request_id: pollResult.requestId,
+                  submit_time: pollResult.submitTime,
+                  scheduled_time: pollResult.scheduledTime,
+                  end_time: pollResult.endTime,
+                  updated_at: new Date().toISOString(),
+                  error_message: `Upload exception: ${uploadException.message}`
+                })
+                .eq('video_id', videoId);
+            } catch (dbError) {
+              console.error('Failed to update database after upload exception:', dbError);
+            }
+          }
+          
+          // Log the final status of the upload process
+          console.log(`Upload process completed. Success: ${uploadSuccess}, URL data available: ${!!urlData}`);
+          if (!uploadSuccess) {
+            console.log('Video marked as failed due to storage upload issues');
+          }
+          
+          // Add a 2-second buffer to ensure video is properly saved
+          await new Promise(resolve => setTimeout(resolve, 2000));
+          
+          // Return success response with video details (matching createVideo format)
+          if (uploadSuccess && urlData) {
+            return res.status(200).json({
+              message: 'Video generation completed',
+              videoId,
+              status: 'completed',
+              videoUrl: urlData.publicUrl
+            });
+          } else {
+            return res.status(500).json({
+              message: 'Video generation failed',
+              videoId,
+              status: 'failed',
+              error: 'Failed to upload video to storage'
+            });
+          }
+        } else {
+          // Update database with failed status
+          await supabase
+            .from('video_metadata')
+            .update({
+              status: 'failed',
+              task_status: pollResult.taskStatus,
+              error_message: pollResult.errorMessage,
+              updated_at: new Date().toISOString()
+            })
+            .eq('video_id', videoId);
+          
+          return res.status(500).json({
+            message: 'Video generation failed',
+            error: pollResult.errorMessage
+          });
+        }
+      } catch (updateError) {
+        console.error('Failed to update final status in database:', updateError);
+        
+        // Update database with error status
+        try {
+          await supabase
+            .from('video_metadata')
+            .update({
+              status: 'failed',
+              error_message: updateError.message,
+              updated_at: new Date().toISOString()
+            })
+            .eq('video_id', videoId);
+        } catch (dbError) {
+          console.error('Failed to update error status in database:', dbError);
+        }
+        
+        return res.status(500).json({
+          message: 'Video processing error',
+          error: updateError.message
+        });
+      }
+    } else {
+      // Update database with error
+      try {
+        await supabase
+          .from('video_metadata')
+          .update({
+            status: 'failed',
+            error_message: 'No task ID returned from API',
+            updated_at: new Date().toISOString()
+          })
+          .eq('video_id', videoId);
+      } catch (updateError) {
+        console.error('Failed to update error status in database:', updateError);
+      }
+      
+      return res.status(500).json({
+        message: 'Video generation failed',
+        error: 'No task ID returned from API'
+      });
+    }
+  } catch (error) {
+    console.error('Error in createVideoUltra:', error);
+    return res.status(500).json({ error: 'Internal server error', details: error.message });
+  }
+});
+
+// Test endpoint for createVideoUltra (bypasses coin deduction for testing)
+router.post('/createVideoUltraTest', async (req, res) => {
+  try {
+    const { uid, promptText, imageUrl } = req.body;
+
+    // Validate required parameters
+    if (!uid) {
+      return res.status(400).json({ error: 'User ID is required' });
+    }
+
+    if (!promptText) {
+      return res.status(400).json({ error: 'Prompt text is required' });
+    }
+
+    if (!imageUrl) {
+      return res.status(400).json({ error: 'Image URL is required' });
+    }
+
+    console.log('=== TESTING createVideoUltra (bypassing coin deduction) ===');
+
+    // Generate unique video ID
+    const videoId = uuidv4();
+    
+    // Fixed parameters for Ultra API - 720p resolution and 5 seconds duration
+    const duration = 5;
+    
+    // Prepare request body for Doubao API
+    const requestBody = {
+      model: "doubao-seedance-1-0-pro-250528",
+      content: [
+        {
+          type: "text",
+          text: `${promptText} --resolution 1080p --duration ${duration} --camerafixed false --watermark false`
+        },
+        {
+          type: "image_url",
+          image_url: {
+            url: imageUrl
+          }
+        }
+      ]
+    };
+
+    console.log('Calling Doubao API with request body:', JSON.stringify(requestBody, null, 2));
+
+    // Call Doubao API
+    const response = await axios.post('https://ark.cn-beijing.volces.com/api/v3/contents/generations/tasks', requestBody, {
+      headers: {
+        'Authorization': `Bearer ${process.env.DOUBAO_API_KEY}`,
+        'Content-Type': 'application/json'
+      }
+    });
+
+    console.log('Doubao API response:', response.data);
+
+    if (response.data && response.data.id) {
+      const taskId = response.data.id;
+      
+      // Store initial video metadata in Supabase
+      const supabase = getSupabaseClient();
+      
+      // Get timezone-aware timestamp for video creation
+      const videoTimestampInfo = createTimezoneAwareTimestamp(req);
+      
+      const { data: insertData, error: insertError } = await supabase
+        .from('video_metadata')
+        .insert({
+          uid,
+          prompt_text: promptText,
+          image_url: imageUrl,
+          status: 'processing',
+          task_id: taskId,
+          created_at: videoTimestampInfo.timestamp,
+          updated_at: videoTimestampInfo.timestamp,
+          timezone: videoTimestampInfo.timezone,
+          video_id: videoId
+        });
+
+      if (insertError) {
+        console.error('Error inserting video metadata:', insertError);
+        return res.status(500).json({ error: 'Failed to store video metadata', details: insertError.message });
+      }
+
+      console.log('Video metadata stored successfully:', insertData);
+
+      // Wait for video generation to complete using synchronous polling
+      console.log('Starting synchronous polling for task:', taskId);
+      const pollResult = await pollDoubaoVideoStatus(taskId, 60, 10000, 30000);
+      console.log('Polling completed for task:', taskId, 'Result:', pollResult);
+      
+      try {
+        if (pollResult.success && pollResult.videoUrl) {
+          // Video generation successful, download and upload to Supabase storage
+          console.log('Video generation successful, downloading from:', pollResult.videoUrl);
+          
+          let uploadSuccess = false;
+          let urlData = null;
+          
+          try {
+            // Download the video with retry logic
+            let videoResponse;
+            let retryCount = 0;
+            const maxRetries = 3;
+            
+            while (retryCount < maxRetries) {
+              try {
+                console.log(`Attempting to download video (attempt ${retryCount + 1}/${maxRetries})`);
+                videoResponse = await axios.get(pollResult.videoUrl, {
+                  responseType: 'arraybuffer',
+                  timeout: 300000 // 5 minutes timeout
+                });
+                console.log('Video downloaded successfully, size:', videoResponse.data.length);
+                break;
+              } catch (downloadError) {
+                retryCount++;
+                console.error(`Download attempt ${retryCount} failed:`, downloadError.message);
+                if (retryCount >= maxRetries) {
+                  throw downloadError;
+                }
+                // Wait before retry
+                await new Promise(resolve => setTimeout(resolve, 5000));
+              }
+            }
+            
+            // Upload to Supabase storage
+            const fileName = `video_${Date.now()}_${Math.random().toString(36).substr(2, 9)}.mp4`;
+            const filePath = `users/${uid}/videos/${fileName}`;
+            
+            console.log('Uploading video to Supabase storage...');
+            const { data, error } = await supabase.storage
+              .from('user-uploads')
+              .upload(filePath, videoResponse.data, {
+                contentType: 'video/mp4',
+                upsert: false
+              });
+            
+            if (error) {
+              console.error('Error uploading video to Supabase storage:', error);
+              throw new Error(`Upload failed: ${error.message}`);
+            } else {
+              console.log('Video uploaded to Supabase storage successfully:', data);
+              
+              // Get public URL
+              const { data: urlData_temp } = supabase.storage
+                .from('user-uploads')
+                .getPublicUrl(filePath);
+              
+              console.log('Generated public URL for upload:', urlData_temp?.publicUrl);
+              
+              // Assign to the higher scope variable
+              urlData = urlData_temp;
+              uploadSuccess = true;
+              
+              // Update database with the Supabase storage URL
+              const { error: updateError } = await supabase
+                .from('video_metadata')
+                .update({
+                  video_url: urlData.publicUrl,
+                  status: 'completed',
+                  task_status: pollResult.taskStatus,
+                  request_id: pollResult.requestId,
+                  submit_time: pollResult.submitTime,
+                  scheduled_time: pollResult.scheduledTime,
+                  end_time: pollResult.endTime,
+                  updated_at: new Date().toISOString()
+                })
+                .eq('video_id', videoId);
+              
+              if (updateError) {
+                console.error('Error updating database with upload URL:', updateError);
+              } else {
+                console.log('Successfully updated database with upload URL');
+              }
+            }
+          } catch (uploadException) {
+            console.error('Unexpected exception during upload process:', uploadException);
+            
+            // Mark as failed instead of using Doubao URL
+            try {
+              console.log('Marking video as failed due to upload exception');
+              await supabase
+                .from('video_metadata')
+                .update({
+                  status: 'failed',
+                  task_status: pollResult.taskStatus,
+                  request_id: pollResult.requestId,
+                  submit_time: pollResult.submitTime,
+                  scheduled_time: pollResult.scheduledTime,
+                  end_time: pollResult.endTime,
+                  updated_at: new Date().toISOString(),
+                  error_message: `Upload exception: ${uploadException.message}`
+                })
+                .eq('video_id', videoId);
+            } catch (dbError) {
+              console.error('Failed to update database after upload exception:', dbError);
+            }
+          }
+          
+          // Log the final status of the upload process
+          console.log(`Upload process completed. Success: ${uploadSuccess}, URL data available: ${!!urlData}`);
+          if (!uploadSuccess) {
+            console.log('Video marked as failed due to storage upload issues');
+          }
+          
+          // Add a 2-second buffer to ensure video is properly saved
+          await new Promise(resolve => setTimeout(resolve, 2000));
+          
+          // Return success response with video details
+          if (uploadSuccess && urlData) {
+            return res.status(200).json({
+              message: 'Video generation completed (TEST MODE)',
+              videoId,
+              status: 'completed',
+              videoUrl: urlData.publicUrl,
+              testMode: true
+            });
+          } else {
+            return res.status(500).json({
+              message: 'Video generation failed',
+              videoId,
+              status: 'failed',
+              error: 'Failed to upload video to storage',
+              testMode: true
+            });
+          }
+        } else {
+          // Update database with failed status
+          await supabase
+            .from('video_metadata')
+            .update({
+              status: 'failed',
+              task_status: pollResult.taskStatus,
+              error_message: pollResult.errorMessage,
+              updated_at: new Date().toISOString()
+            })
+            .eq('video_id', videoId);
+          
+          return res.status(500).json({
+            message: 'Video generation failed',
+            error: pollResult.errorMessage,
+            testMode: true
+          });
+        }
+      } catch (updateError) {
+        console.error('Failed to update final status in database:', updateError);
+        
+        // Update database with error status
+        try {
+          await supabase
+            .from('video_metadata')
+            .update({
+              status: 'failed',
+              error_message: updateError.message,
+              updated_at: new Date().toISOString()
+            })
+            .eq('video_id', videoId);
+        } catch (dbError) {
+          console.error('Failed to update error status in database:', dbError);
+        }
+        
+        return res.status(500).json({
+          message: 'Video processing error',
+          error: updateError.message,
+          testMode: true
+        });
+      }
+    } else {
+      return res.status(500).json({
+        message: 'Video generation failed',
+        error: 'No task ID returned from API',
+        testMode: true
+      });
+    }
+  } catch (error) {
+    console.error('Error in createVideoUltraTest:', error);
+    return res.status(500).json({ error: 'Internal server error', details: error.message, testMode: true });
+  }
+});
+
+// Get method for createVideoUltra (for testing)
+router.get('/createVideoUltra', (req, res) => {
+  res.json({ 
+    message: 'createVideoUltra endpoint is available. Use POST method with image URL.',
+    required_fields: ['uid', 'promptText', 'imageUrl'],
+    fixed_parameters: {
+      resolution: '720p (1280x720)',
+      duration: '5 seconds'
+    },
+    api_provider: 'doubao',
+    coin_cost: 5,
+    test_endpoint: '/api/video/createVideoUltraTest (bypasses coin deduction)'
+  });
 });
 
 module.exports = router;
